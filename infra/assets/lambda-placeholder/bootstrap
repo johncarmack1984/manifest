@@ -1,0 +1,5 @@
+#!/bin/sh
+# Placeholder so `cdk synth` works without a Rust build. The real arm64
+# `bootstrap` binary is produced by `just api` (cargo lambda build) and replaces
+# this asset at deploy time. This file is never actually invoked.
+exit 1

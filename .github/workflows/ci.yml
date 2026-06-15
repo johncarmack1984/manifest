@@ -1,0 +1,52 @@
+name: ci
+
+# Credential-free health check: the Rust API compiles, the SPA builds, and the
+# CDK app synthesizes (with placeholder assets + dummy config — no AWS calls).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --manifest-path api/Cargo.toml
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install
+      - run: cd web && pnpm build
+
+  infra:
+    runs-on: ubuntu-latest
+    env:
+      CDK_DEFAULT_ACCOUNT: "111111111111"
+      CDK_DEFAULT_REGION: us-east-1
+      MANIFEST_DOMAIN_NAME: manifest.example.com
+      MANIFEST_HOSTED_ZONE_ID: Z0123456789ABCDEFGHIJ
+      MANIFEST_HOSTED_ZONE_NAME: example.com
+      MANIFEST_COGNITO_DOMAIN_PREFIX: manifest-ci
+      MANIFEST_OWNER_EMAIL: ci@example.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install
+      - run: cd infra && pnpm exec cdk synth

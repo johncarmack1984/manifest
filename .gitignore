@@ -1,0 +1,19 @@
+# Rust
+api/target/
+
+# Node / pnpm
+node_modules/
+**/node_modules/
+web/dist/
+*.tsbuildinfo
+
+# CDK
+**/cdk.out/
+
+# Local config — never commit real values
+infra/.env
+**/.env
+
+# misc
+.DS_Store
+*.log
