@@ -1,40 +1,19 @@
+use std::collections::BTreeMap;
+
 use aws_sdk_resourceexplorer2::types::Resource;
+use aws_smithy_types::Document;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
     Json,
 };
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+
+use manifest_api::classify::classify;
+use manifest_api::registry::Registry;
 
 use crate::auth::AuthUser;
 use crate::{AppState, Refresh, Res};
-
-/// Resource types that are AWS-managed defaults, plumbing, or version artifacts —
-/// the noise that swamps an account inventory. Hidden by default in the UI.
-const MANAGED_TYPES: &[&str] = &[
-    "lambda:function/version",
-    "ec2:security-group-rule",
-    "ec2:subnet",
-    "ec2:route-table",
-    "ec2:network-acl",
-    "ec2:internet-gateway",
-    "ec2:dhcp-options",
-    "memorydb:parametergroup",
-    "memorydb:user",
-    "memorydb:acl",
-    "memorydb:subnetgroup",
-    "elasticache:user",
-    "rds:pg",
-    "rds:og",
-    "rds:secgrp",
-    "rds:subgrp",
-    "athena:datacatalog",
-    "athena:workgroup",
-    "xray:sampling-rule",
-    "events:event-bus",
-    "resource-explorer-2:index",
-];
 
 pub async fn handler(
     State(s): State<AppState>,
@@ -42,13 +21,13 @@ pub async fn handler(
     Query(q): Query<Refresh>,
 ) -> Result<Json<Value>, StatusCode> {
     if !q.requested() {
-        if let Some(v) = crate::cache_get(&s, "inventory:v1").await {
+        if let Some(v) = crate::cache_get(&s, "inventory:v2").await {
             return Ok(Json(v));
         }
     }
     match compute(&s).await {
         Ok(v) => {
-            crate::cache_put(&s, "inventory:v1", &v).await;
+            crate::cache_put(&s, "inventory:v2", &v).await;
             Ok(Json(v))
         }
         Err(e) => {
@@ -58,15 +37,36 @@ pub async fn handler(
     }
 }
 
-fn has_tags(r: &Resource) -> bool {
-    r.properties().iter().any(|p| p.name() == Some("tags"))
+/// Resource Explorer returns tags as the `tags` property (array of {Key, Value}).
+fn tags_of(r: &Resource) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Some(prop) = r.properties().iter().find(|p| p.name() == Some("tags")) else {
+        return out;
+    };
+    let Some(Document::Array(arr)) = prop.data() else {
+        return out;
+    };
+    for item in arr {
+        if let Document::Object(map) = item {
+            let key = map.get("Key").and_then(doc_str);
+            let val = map.get("Value").and_then(doc_str);
+            if let (Some(k), Some(v)) = (key, val) {
+                out.insert(k, v);
+            }
+        }
+    }
+    out
 }
 
-fn is_managed(rtype: &str, name: &str) -> bool {
-    MANAGED_TYPES.contains(&rtype) || name.starts_with("default") || name == "AwsDataCatalog"
+fn doc_str(d: &Document) -> Option<String> {
+    match d {
+        Document::String(s) => Some(s.clone()),
+        _ => None,
+    }
 }
 
 async fn compute(s: &AppState) -> Res<Value> {
+    let registry = Registry::load();
     let mut resources: Vec<Value> = Vec::new();
 
     for region in &s.0.cfg.indexed_regions {
@@ -82,17 +82,21 @@ async fn compute(s: &AppState) -> Res<Value> {
             for r in resp.resources() {
                 let arn = r.arn().unwrap_or_default().to_string();
                 let rtype = r.resource_type().unwrap_or_default().to_string();
-                let name = arn.rsplit([':', '/']).next().unwrap_or("").to_string();
-                let untagged = !has_tags(r);
-                let managed = is_managed(&rtype, &name);
+                let service = r.service().unwrap_or_default().to_string();
+                let name = arn.rsplit(['/', ':']).next().unwrap_or("").to_string();
+                let tags = tags_of(r);
+                let stack = tags.get("aws:cloudformation:stack-name").map(String::as_str);
+                let c = classify(&name, &rtype, &service, stack, &registry);
                 resources.push(json!({
                     "arn": arn,
                     "type": rtype,
                     "region": r.region().unwrap_or_default(),
-                    "service": r.service().unwrap_or_default(),
+                    "service": service,
                     "name": name,
-                    "untagged": untagged,
-                    "managed": managed,
+                    "category": c.category.as_str(),
+                    "app": c.app,
+                    "protected": c.protected,
+                    "reason": c.reason,
                 }));
             }
 
@@ -104,33 +108,26 @@ async fn compute(s: &AppState) -> Res<Value> {
     }
 
     let mut by_region: BTreeMap<String, usize> = BTreeMap::new();
-    let mut by_type: BTreeMap<String, usize> = BTreeMap::new();
-    let mut owned = 0usize;
-    let mut untagged_total = 0usize;
-    let mut untagged_owned = 0usize;
+    let mut by_app: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_category: BTreeMap<String, usize> = BTreeMap::new();
     for r in &resources {
         *by_region.entry(r["region"].as_str().unwrap_or("").to_string()).or_default() += 1;
-        *by_type.entry(r["type"].as_str().unwrap_or("").to_string()).or_default() += 1;
-        let managed = r["managed"].as_bool().unwrap_or(false);
-        let untagged = r["untagged"].as_bool().unwrap_or(false);
-        if untagged {
-            untagged_total += 1;
-        }
-        if !managed {
-            owned += 1;
-            if untagged {
-                untagged_owned += 1;
-            }
+        *by_category.entry(r["category"].as_str().unwrap_or("").to_string()).or_default() += 1;
+        if let Some(a) = r["app"].as_str() {
+            *by_app.entry(a.to_string()).or_default() += 1;
         }
     }
 
     Ok(json!({
         "count": resources.len(),
-        "ownedCount": owned,
         "resources": resources,
         "byRegion": by_region,
-        "byType": by_type,
-        "flags": { "untaggedCount": untagged_total, "untaggedOwned": untagged_owned },
+        "byApp": by_app,
+        "byCategory": by_category,
+        "flags": {
+            "orphans": by_category.get("orphan").copied().unwrap_or(0),
+            "unclaimed": by_category.get("unclaimed").copied().unwrap_or(0),
+        },
         "indexedRegions": s.0.cfg.indexed_regions,
         "generatedAt": chrono::Utc::now().to_rfc3339(),
     }))

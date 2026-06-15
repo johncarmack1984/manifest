@@ -43,7 +43,7 @@ export default function Overview() {
           value={inv.data?.count ?? "—"}
           sub={`${inv.data?.indexedRegions.length ?? 0} indexed regions`}
         />
-        <Stat label="Untagged" value={inv.data?.flags.untaggedOwned ?? "—"} sub="owned (excl. AWS-managed)" />
+        <Stat label="Orphans" value={inv.data?.flags.orphans ?? "—"} sub="dead / handed-off" />
       </div>
 
       {uncovered.length > 0 && (

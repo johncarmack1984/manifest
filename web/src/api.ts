@@ -37,16 +37,19 @@ export interface ResourceRow {
   region: string;
   service: string;
   name: string;
-  untagged: boolean;
-  managed: boolean;
+  /** aws-managed | tooling | app | orphan | unclaimed */
+  category: string;
+  app: string | null;
+  protected: boolean;
+  reason: string;
 }
 export interface InventoryData {
   count: number;
-  ownedCount: number;
   resources: ResourceRow[];
   byRegion: Record<string, number>;
-  byType: Record<string, number>;
-  flags: { untaggedCount: number; untaggedOwned: number };
+  byApp: Record<string, number>;
+  byCategory: Record<string, number>;
+  flags: { orphans: number; unclaimed: number };
   indexedRegions: string[];
   generatedAt: string;
 }
