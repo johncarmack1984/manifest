@@ -28,6 +28,11 @@ loadConfig()
         end_session_endpoint: `https://${hostedDomain}/logout`,
         jwks_uri: `${authority}/.well-known/jwks.json`,
       },
+      // When federated to Identity Center, skip Cognito's IdP chooser and go
+      // straight to the AWS access portal.
+      ...(cfg.cognito.identityProvider
+        ? { extraQueryParams: { identity_provider: cfg.cognito.identityProvider } }
+        : {}),
       onSigninCallback: () => {
         void router.navigate({ to: "/" });
       },

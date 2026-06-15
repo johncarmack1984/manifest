@@ -45,6 +45,7 @@ pub struct Config {
     pub cognito_pool_id: String,
     pub cognito_client_id: String,
     pub cognito_hosted_domain: String,
+    pub cognito_identity_provider: String,
 }
 
 impl Config {
@@ -65,6 +66,7 @@ impl Config {
             cognito_pool_id: var("COGNITO_USER_POOL_ID"),
             cognito_client_id: var("COGNITO_CLIENT_ID"),
             cognito_hosted_domain: var("COGNITO_HOSTED_DOMAIN"),
+            cognito_identity_provider: var("COGNITO_IDENTITY_PROVIDER"),
         }
     }
 
@@ -121,6 +123,7 @@ async fn public_config(State(s): State<AppState>) -> Json<Value> {
             "userPoolId": c.cognito_pool_id,
             "clientId": c.cognito_client_id,
             "hostedDomain": c.cognito_hosted_domain,
+            "identityProvider": c.cognito_identity_provider,
         }
     }))
 }

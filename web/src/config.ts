@@ -9,6 +9,8 @@ export interface AppConfig {
     userPoolId: string;
     clientId: string;
     hostedDomain: string;
+    /** SAML provider name when federated to Identity Center; empty otherwise. */
+    identityProvider?: string;
   };
 }
 

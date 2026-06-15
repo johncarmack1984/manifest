@@ -57,6 +57,26 @@ temporary password emailed by Cognito; set a real one on first sign-in.
 
 Individual steps: `just api`, `just web`, `just up`, `just synth`, `just destroy`.
 
+## Authentication
+Out of the box, sign-in uses a Cognito Hosted UI with one admin-created user
+(`MANIFEST_OWNER_EMAIL`); Cognito emails a temporary password on first deploy.
+
+To sign in with **AWS IAM Identity Center** (your AWS SSO) instead — no separate
+password — federate Cognito to Identity Center via SAML:
+
+1. Deploy once *without* `MANIFEST_SAML_METADATA_URL`. Note the stack outputs
+   `SamlAcsUrl` and `SamlSpEntityId`.
+2. In IAM Identity Center → Applications → **Add customer managed application**
+   (SAML 2.0): set **Application ACS URL** = `SamlAcsUrl`, **Application SAML
+   audience** = `SamlSpEntityId`, add an attribute mapping `email` → `${user:email}`
+   (Subject/NameID = email), and assign yourself. Copy the app's **IAM Identity
+   Center SAML metadata** URL.
+3. Set `MANIFEST_SAML_METADATA_URL=…` in `infra/.env` and `just up` again. Sign-in
+   now goes straight to your AWS access portal; the Cognito-local user is removed.
+
+Cognito stays as the OIDC broker (the API validates its JWT) — you just never see
+a Cognito password again.
+
 ## Indexing more regions
 Set `MANIFEST_INDEXED_REGIONS=us-east-1,us-west-2,eu-west-1` in `infra/.env`.
 Each extra region gets its own tiny `RegionIndexStack`. Cost views always cover

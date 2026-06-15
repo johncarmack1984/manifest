@@ -23,8 +23,12 @@ export interface ManifestConfig {
   hostedZoneName: string;
   /** Globally-unique prefix for the Cognito Hosted UI domain. */
   cognitoDomainPrefix: string;
-  /** Email of the single dashboard user (admin-created in the pool). */
+  /** Email of the single dashboard user (admin-created in the pool). Ignored
+   *  when samlMetadataUrl is set (users then come from Identity Center). */
   ownerEmail: string;
+  /** Optional: IAM Identity Center SAML app metadata URL. When set, sign-in
+   *  federates to Identity Center (AWS SSO) and no Cognito-local user is made. */
+  samlMetadataUrl: string;
 }
 
 export function loadConfig(): ManifestConfig {
@@ -41,6 +45,7 @@ export function loadConfig(): ManifestConfig {
     hostedZoneName: e.MANIFEST_HOSTED_ZONE_NAME || '',
     cognitoDomainPrefix: e.MANIFEST_COGNITO_DOMAIN_PREFIX || '',
     ownerEmail: e.MANIFEST_OWNER_EMAIL || '',
+    samlMetadataUrl: e.MANIFEST_SAML_METADATA_URL || '',
   };
 
   const required: Record<string, string> = {
@@ -48,7 +53,9 @@ export function loadConfig(): ManifestConfig {
     MANIFEST_HOSTED_ZONE_ID: cfg.hostedZoneId,
     MANIFEST_HOSTED_ZONE_NAME: cfg.hostedZoneName,
     MANIFEST_COGNITO_DOMAIN_PREFIX: cfg.cognitoDomainPrefix,
-    MANIFEST_OWNER_EMAIL: cfg.ownerEmail,
+    // Only needed for the default Cognito-local login; Identity Center
+    // federation (samlMetadataUrl) provides users instead.
+    ...(cfg.samlMetadataUrl ? {} : { MANIFEST_OWNER_EMAIL: cfg.ownerEmail }),
   };
   const missing = Object.entries(required)
     .filter(([, v]) => !v)

@@ -49,7 +49,9 @@ function Layout() {
         <div className="text-center">
           <div className="mb-1 text-lg font-semibold">manifest</div>
           <div className="mb-5 text-sm text-neutral-500">account {cfg.accountId}</div>
-          <Button onClick={() => void auth.signinRedirect()}>Sign in with Cognito</Button>
+          <Button onClick={() => void auth.signinRedirect()}>
+            Sign in with {cfg.cognito.identityProvider ? "AWS SSO" : "Cognito"}
+          </Button>
         </div>
       </Center>
     );

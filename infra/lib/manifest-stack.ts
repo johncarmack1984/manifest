@@ -80,6 +80,21 @@ export class ManifestStack extends cdk.Stack {
       cognitoDomain: { domainPrefix: cfg.cognitoDomainPrefix },
     });
 
+    // Optionally federate to AWS IAM Identity Center via SAML so sign-in goes to
+    // your AWS access portal — no Cognito-local password. Opt in by setting
+    // MANIFEST_SAML_METADATA_URL (see README). Either way Cognito stays the OIDC
+    // broker; the API just validates its JWT.
+    const SAML_PROVIDER = 'IdentityCenter';
+    let samlIdp: cognito.UserPoolIdentityProviderSaml | undefined;
+    if (cfg.samlMetadataUrl) {
+      samlIdp = new cognito.UserPoolIdentityProviderSaml(this, 'IdentityCenter', {
+        userPool: pool,
+        name: SAML_PROVIDER,
+        metadata: cognito.UserPoolIdentityProviderSamlMetadata.url(cfg.samlMetadataUrl),
+        attributeMapping: { email: cognito.ProviderAttribute.other('email') },
+      });
+    }
+
     const client = pool.addClient('Spa', {
       userPoolClientName: 'spa',
       generateSecret: false,
@@ -89,23 +104,29 @@ export class ManifestStack extends cdk.Stack {
         callbackUrls: [`https://${cfg.domainName}/auth/callback`],
         logoutUrls: [`https://${cfg.domainName}/`],
       },
-      supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
+      supportedIdentityProviders: samlIdp
+        ? [cognito.UserPoolClientIdentityProvider.custom(SAML_PROVIDER)]
+        : [cognito.UserPoolClientIdentityProvider.COGNITO],
       authFlows: { userSrp: true },
       accessTokenValidity: cdk.Duration.minutes(60),
       idTokenValidity: cdk.Duration.minutes(60),
       refreshTokenValidity: cdk.Duration.days(30),
     });
+    // The client can't reference the SAML provider until it exists.
+    if (samlIdp) client.node.addDependency(samlIdp);
 
-    // The single dashboard user. Cognito emails a temporary password; set a
-    // real one on first sign-in.
-    new cognito.CfnUserPoolUser(this, 'Owner', {
-      userPoolId: pool.userPoolId,
-      username: cfg.ownerEmail,
-      userAttributes: [
-        { name: 'email', value: cfg.ownerEmail },
-        { name: 'email_verified', value: 'true' },
-      ],
-    });
+    // No Cognito-local users when federated. Otherwise create the single admin
+    // user (Cognito emails a temp password; set a real one on first sign-in).
+    if (!samlIdp) {
+      new cognito.CfnUserPoolUser(this, 'Owner', {
+        userPoolId: pool.userPoolId,
+        username: cfg.ownerEmail,
+        userAttributes: [
+          { name: 'email', value: cfg.ownerEmail },
+          { name: 'email_verified', value: 'true' },
+        ],
+      });
+    }
 
     // ---------------------------------------------------------------------
     // Lambda (Axum, arm64) + Function URL (IAM-auth, CloudFront-only via OAC).
@@ -136,6 +157,7 @@ export class ManifestStack extends cdk.Stack {
         COGNITO_USER_POOL_ID: pool.userPoolId,
         COGNITO_CLIENT_ID: client.userPoolClientId,
         COGNITO_HOSTED_DOMAIN: `${cfg.cognitoDomainPrefix}.auth.${PRIMARY_REGION}.amazoncognito.com`,
+        COGNITO_IDENTITY_PROVIDER: samlIdp ? SAML_PROVIDER : '',
       },
     });
 
@@ -260,6 +282,16 @@ export class ManifestStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'CognitoUserPoolId', { value: pool.userPoolId });
     new cdk.CfnOutput(this, 'CognitoClientId', { value: client.userPoolClientId });
     new cdk.CfnOutput(this, 'ResourceExplorerViewArn', { value: view.attrViewArn });
+
+    // For configuring the Identity Center SAML app (see README → Authentication).
+    new cdk.CfnOutput(this, 'SamlAcsUrl', {
+      description: 'Identity Center SAML app: Application ACS URL',
+      value: `https://${cfg.cognitoDomainPrefix}.auth.${PRIMARY_REGION}.amazoncognito.com/saml2/idpresponse`,
+    });
+    new cdk.CfnOutput(this, 'SamlSpEntityId', {
+      description: 'Identity Center SAML app: Application SAML audience',
+      value: `urn:amazon:cognito:sp:${pool.userPoolId}`,
+    });
   }
 }
 
