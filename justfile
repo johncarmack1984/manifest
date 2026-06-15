@@ -11,7 +11,7 @@ api:
 
 # Classify + tag the account inventory (dry-run by default; pass --apply to write).
 tag *args:
-    cd api && cargo run --quiet --bin tag -- {{args}}
+    cd api && set -a && . ../infra/.env && set +a && AWS_REGION=us-east-1 cargo run --quiet --bin tag -- {{args}}
 
 # Build the React SPA.
 web:

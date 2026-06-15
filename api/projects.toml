@@ -46,6 +46,13 @@ patterns = ["mic-development", "TestMedusaBackend"]
 dead = true
 reason = "old Medusa dev backend"
 
+[[project]]
+repo = "retired"
+patterns = ["app-state-local-johncarmack", "john-carmack-app-state", "bun-server"]
+types = ["wellarchitected:workload"]
+dead = true
+reason = "decommissioned (confirmed 2026-06-15)"
+
 # ---- Live projects ----
 [[project]]
 repo = "stormdeck"
