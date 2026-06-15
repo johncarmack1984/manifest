@@ -77,6 +77,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    if std::env::var("DUMP").is_ok() {
+        for r in &rows {
+            println!("DUMP {} | {} | {} | {} | {:?}", r.name, r.rtype, r.region, r.category.as_str(), r.app);
+        }
+    }
+
     report(&rows);
 
     if apply {
