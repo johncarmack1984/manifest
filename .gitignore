@@ -9,6 +9,7 @@ web/dist/
 
 # CDK
 **/cdk.out/
+infra/cdk-outputs.json
 
 # Local config — never commit real values
 infra/.env

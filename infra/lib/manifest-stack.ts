@@ -38,12 +38,21 @@ export class ManifestStack extends cdk.Stack {
     // ---------------------------------------------------------------------
     // Resource Explorer: AGGREGATOR index (this region) + a view over all.
     // ---------------------------------------------------------------------
-    const index = new re.CfnIndex(this, 'Aggregator', { type: 'AGGREGATOR' });
-    const view = new re.CfnView(this, 'AllView', {
-      viewName: `${cfg.name}-all`,
-      includedProperties: [{ name: 'tags' }],
-    });
-    view.addDependency(index);
+    // Create an AGGREGATOR index + view, or reuse an existing account view. Only
+    // one aggregator/index is allowed per account/region, so reuse when the
+    // account already has Resource Explorer (MANIFEST_RESOURCE_EXPLORER_VIEW_ARN).
+    let viewArn: string;
+    if (cfg.resourceExplorerViewArn) {
+      viewArn = cfg.resourceExplorerViewArn;
+    } else {
+      const index = new re.CfnIndex(this, 'Aggregator', { type: 'AGGREGATOR' });
+      const view = new re.CfnView(this, 'AllView', {
+        viewName: `${cfg.name}-all`,
+        includedProperties: [{ name: 'tags' }],
+      });
+      view.addDependency(index);
+      viewArn = view.attrViewArn;
+    }
 
     // ---------------------------------------------------------------------
     // Cost Explorer response cache (CE charges $0.01/request).
@@ -147,7 +156,7 @@ export class ManifestStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       logGroup: apiLogs,
       environment: {
-        RESOURCE_EXPLORER_VIEW_ARN: view.attrViewArn,
+        RESOURCE_EXPLORER_VIEW_ARN: viewArn,
         CACHE_TABLE: cache.tableName,
         CACHE_TTL_SECONDS: String(cfg.cacheTtlSeconds),
         INDEXED_REGIONS: cfg.indexedRegions.join(','),
@@ -290,7 +299,7 @@ export class ManifestStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DistributionId', { value: dist.distributionId });
     new cdk.CfnOutput(this, 'CognitoUserPoolId', { value: pool.userPoolId });
     new cdk.CfnOutput(this, 'CognitoClientId', { value: client.userPoolClientId });
-    new cdk.CfnOutput(this, 'ResourceExplorerViewArn', { value: view.attrViewArn });
+    new cdk.CfnOutput(this, 'ResourceExplorerViewArn', { value: viewArn });
 
     // For configuring the Identity Center SAML app (see README → Authentication).
     new cdk.CfnOutput(this, 'SamlAcsUrl', {
