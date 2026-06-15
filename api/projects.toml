@@ -67,10 +67,6 @@ repo = "manifest"
 patterns = ["manifest"]
 
 [[project]]
-repo = "cost-dashboard"
-patterns = ["cost-dashboard"]
-
-[[project]]
 repo = "vegify"
 patterns = ["vegify"]
 

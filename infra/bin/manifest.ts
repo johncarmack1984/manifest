@@ -24,9 +24,9 @@ cdk.Tags.of(app).add('ManagedBy', 'cdk');
 // which gets the AGGREGATOR index inside the main stack. A CDK stack is
 // single-region, so every extra region is its own (tiny) stack. Adding a
 // region is one entry in MANIFEST_INDEXED_REGIONS — no code change.
-// Per-region LOCAL indexes — only when creating our own Resource Explorer.
-// Skipped when reusing an existing account view (which already has its indexes).
-if (!cfg.resourceExplorerViewArn) {
+// Per-region LOCAL indexes — only when we create our own aggregator. Skipped when
+// reusing an existing account aggregator (which already has its region indexes).
+if (cfg.createAggregator) {
   for (const region of cfg.indexedRegions.filter((r) => r !== PRIMARY_REGION)) {
     new RegionIndexStack(app, `${stackId(cfg.name)}-Index-${region}`, {
       env: { account, region },

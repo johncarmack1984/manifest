@@ -29,10 +29,10 @@ export interface ManifestConfig {
   /** Optional: IAM Identity Center SAML app metadata URL. When set, sign-in
    *  federates to Identity Center (AWS SSO) and no Cognito-local user is made. */
   samlMetadataUrl: string;
-  /** Optional: reuse an existing Resource Explorer view (ARN) instead of creating
-   *  an aggregator index + view. Set when the account already has Resource Explorer
-   *  (only one aggregator/index is allowed per account/region). */
-  resourceExplorerViewArn: string;
+  /** Whether to create the Resource Explorer AGGREGATOR index (+ per-region LOCAL
+   *  indexes). Set false to reuse an aggregator the account already has — only one
+   *  is allowed per account/region. The manifest-owned view is created either way. */
+  createAggregator: boolean;
 }
 
 export function loadConfig(): ManifestConfig {
@@ -50,7 +50,7 @@ export function loadConfig(): ManifestConfig {
     cognitoDomainPrefix: e.MANIFEST_COGNITO_DOMAIN_PREFIX || '',
     ownerEmail: e.MANIFEST_OWNER_EMAIL || '',
     samlMetadataUrl: e.MANIFEST_SAML_METADATA_URL || '',
-    resourceExplorerViewArn: e.MANIFEST_RESOURCE_EXPLORER_VIEW_ARN || '',
+    createAggregator: e.MANIFEST_CREATE_AGGREGATOR !== 'false',
   };
 
   const required: Record<string, string> = {

@@ -38,21 +38,22 @@ export class ManifestStack extends cdk.Stack {
     // ---------------------------------------------------------------------
     // Resource Explorer: AGGREGATOR index (this region) + a view over all.
     // ---------------------------------------------------------------------
-    // Create an AGGREGATOR index + view, or reuse an existing account view. Only
-    // one aggregator/index is allowed per account/region, so reuse when the
-    // account already has Resource Explorer (MANIFEST_RESOURCE_EXPLORER_VIEW_ARN).
-    let viewArn: string;
-    if (cfg.resourceExplorerViewArn) {
-      viewArn = cfg.resourceExplorerViewArn;
-    } else {
-      const index = new re.CfnIndex(this, 'Aggregator', { type: 'AGGREGATOR' });
-      const view = new re.CfnView(this, 'AllView', {
-        viewName: `${cfg.name}-all`,
-        includedProperties: [{ name: 'tags' }],
-      });
-      view.addDependency(index);
-      viewArn = view.attrViewArn;
+    // Resource Explorer: a manifest-owned view named "<name>-all". The AGGREGATOR
+    // index (one per account/region) is created here too — unless the account
+    // already has one (MANIFEST_CREATE_AGGREGATOR=false), in which case the view
+    // just works over the existing aggregator.
+    let aggregator: re.CfnIndex | undefined;
+    if (cfg.createAggregator) {
+      aggregator = new re.CfnIndex(this, 'Aggregator', { type: 'AGGREGATOR' });
     }
+    const view = new re.CfnView(this, 'AllView', {
+      viewName: `${cfg.name}-all`,
+      includedProperties: [{ name: 'tags' }],
+    });
+    if (aggregator) {
+      view.addDependency(aggregator);
+    }
+    const viewArn = view.attrViewArn;
 
     // ---------------------------------------------------------------------
     // Cost Explorer response cache (CE charges $0.01/request).
