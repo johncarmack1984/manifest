@@ -88,6 +88,8 @@ patterns = ["well-terraformed-framework"]
 [[project]]
 repo = "sentiment-analyzer"
 patterns = ["zappa-keep-warm", "sentiment"]
+dead = true
+reason = "zappa undeploy'd; keep-warm rules removed"
 
 # Email domains classify to the app/org they serve (placed after the specific
 # apps so e.g. manifest.johncarmack.com still matches manifest first).
