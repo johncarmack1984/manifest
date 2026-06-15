@@ -1,51 +1,62 @@
 import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { useAuth } from "react-oidc-context";
-import { getInventory } from "../api";
+import { getInventory, type ResourceRow } from "../api";
 import { useAsync } from "../lib/useAsync";
-import { Card, CardHeader, CardBody, Stat, Spinner } from "../components/ui";
+import { Stat, Spinner } from "../components/ui";
 import { cn } from "../lib/utils";
 
-const CAT_CLASS: Record<string, string> = {
-  orphan: "border-red-900 bg-red-950/40 text-red-300",
-  unclaimed: "border-amber-900 bg-amber-950/30 text-amber-300",
-  app: "border-emerald-900 bg-emerald-950/30 text-emerald-300",
-  tooling: "border-neutral-800 text-neutral-600",
-  "aws-managed": "border-neutral-800 text-neutral-600",
+// Group-header tint when a group isn't a normal app (draws the eye to cruft).
+const TONE: Record<string, string> = {
+  orphan: "text-red-300",
+  unclaimed: "text-amber-300",
+  tooling: "text-neutral-500",
+  "aws-managed": "text-neutral-500",
 };
-
-const RANK: Record<string, number> = { orphan: 0, unclaimed: 1, app: 2, tooling: 3, "aws-managed": 4 };
-
-function CatPill({ c }: { c: string }) {
-  return (
-    <span className={cn("rounded-md border px-2 py-0.5 text-xs", CAT_CLASS[c] ?? "border-neutral-700 text-neutral-400")}>
-      {c}
-    </span>
-  );
-}
 
 export default function Inventory() {
   const token = useAuth().user?.id_token;
   const { data, loading, error } = useAsync(() => getInventory(token), [token]);
   const [q, setQ] = useState("");
   const [region, setRegion] = useState("all");
-  const [app, setApp] = useState("all");
   const [hideNoise, setHideNoise] = useState(true);
+  const [open, setOpen] = useState<Set<string>>(new Set());
 
   if (loading) return <Spinner label="Loading inventory…" />;
   if (error || !data) return <div className="text-sm text-red-400">Error: {error}</div>;
 
   const isNoise = (c: string) => c === "aws-managed" || c === "tooling";
-  const apps = Object.entries(data.byApp).sort((a, b) => b[1] - a[1]);
+  const filtered = data.resources.filter(
+    (r) =>
+      (!hideNoise || !isNoise(r.category)) &&
+      (region === "all" || r.region === region) &&
+      (q === "" || `${r.arn} ${r.type} ${r.name}`.toLowerCase().includes(q.toLowerCase())),
+  );
 
-  const rows = data.resources
-    .filter(
-      (r) =>
-        (!hideNoise || !isNoise(r.category)) &&
-        (region === "all" || r.region === region) &&
-        (app === "all" || r.app === app) &&
-        (q === "" || `${r.arn} ${r.type} ${r.name}`.toLowerCase().includes(q.toLowerCase())),
-    )
-    .sort((a, b) => (RANK[a.category] ?? 5) - (RANK[b.category] ?? 5));
+  // Group by app; resources with no app fall back to their category bucket.
+  const groups = new Map<string, ResourceRow[]>();
+  for (const r of filtered) {
+    const key = r.app ?? r.category;
+    const g = groups.get(key);
+    if (g) g.push(r);
+    else groups.set(key, [r]);
+  }
+  // Orphans first, then unclaimed, then apps by size.
+  const rank = (items: ResourceRow[]) =>
+    items[0].category === "orphan" ? 0 : items[0].category === "unclaimed" ? 1 : 2;
+  const sorted = [...groups.entries()].sort(
+    (a, b) => rank(a[1]) - rank(b[1]) || b[1].length - a[1].length,
+  );
+
+  const allOpen = sorted.length > 0 && open.size === sorted.length;
+  const toggleAll = () => setOpen(allOpen ? new Set() : new Set(sorted.map(([k]) => k)));
+  const toggle = (k: string) =>
+    setOpen((s) => {
+      const n = new Set(s);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
+      return n;
+    });
 
   return (
     <div className="space-y-4">
@@ -53,30 +64,8 @@ export default function Inventory() {
         <Stat label="Resources" value={data.count} />
         <Stat label="Orphans" value={data.flags.orphans} sub="dead / handed-off" />
         <Stat label="Unclaimed" value={data.flags.unclaimed} sub="needs attribution" />
-        <Stat label="Apps" value={apps.length} />
+        <Stat label="Apps" value={Object.keys(data.byApp).length} />
       </div>
-
-      <Card>
-        <CardHeader title="By app" right={<span className="text-xs text-neutral-500">click to filter</span>} />
-        <CardBody>
-          <div className="flex flex-wrap gap-2">
-            {apps.map(([a, n]) => (
-              <button
-                key={a}
-                onClick={() => setApp(app === a ? "all" : a)}
-                className={cn(
-                  "rounded-md border px-2 py-1 text-xs",
-                  app === a
-                    ? "border-neutral-500 text-white"
-                    : "border-neutral-800 text-neutral-400 hover:text-neutral-200",
-                )}
-              >
-                {a} <span className="tabular-nums text-neutral-500">×{n}</span>
-              </button>
-            ))}
-          </div>
-        </CardBody>
-      </Card>
 
       <div className="flex flex-wrap items-center gap-3">
         <input
@@ -106,59 +95,58 @@ export default function Inventory() {
           />
           Hide AWS-managed + tooling
         </label>
+        <button
+          onClick={toggleAll}
+          className="rounded-md border border-neutral-800 px-3 py-1.5 text-sm text-neutral-400 hover:text-neutral-200"
+        >
+          {allOpen ? "Collapse all" : "Expand all"}
+        </button>
       </div>
 
-      <Card>
-        <CardBody className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full table-fixed text-sm">
-              <colgroup>
-                <col style={{ width: "12%" }} />
-                <col style={{ width: "16%" }} />
-                <col style={{ width: "10%" }} />
-                <col style={{ width: "28%" }} />
-                <col style={{ width: "34%" }} />
-              </colgroup>
-              <thead>
-                <tr className="border-b border-neutral-800 text-left text-xs uppercase tracking-wide text-neutral-500">
-                  <th className="px-4 py-2 font-medium">Category</th>
-                  <th className="px-4 py-2 font-medium">App</th>
-                  <th className="px-4 py-2 font-medium">Region</th>
-                  <th className="px-4 py-2 font-medium">Name</th>
-                  <th className="px-4 py-2 font-medium">Type / reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.slice(0, 500).map((r) => (
-                  <tr
-                    key={r.arn}
-                    className={cn(
-                      "border-b border-neutral-800/50 last:border-0",
-                      r.category === "orphan" && "bg-red-950/10",
-                    )}
-                  >
-                    <td className="px-4 py-2">
-                      <CatPill c={r.category} />
-                    </td>
-                    <td className="truncate px-4 py-2 text-neutral-300">{r.app ?? "—"}</td>
-                    <td className="truncate px-4 py-2 text-neutral-500">{r.region}</td>
-                    <td className="truncate px-4 py-2 text-neutral-300" title={r.arn}>
-                      {r.name}
-                    </td>
-                    <td className="truncate px-4 py-2 text-neutral-500" title={r.reason}>
-                      {r.type}
-                      {r.category === "orphan" || r.category === "unclaimed" ? ` · ${r.reason}` : ""}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {rows.length > 500 && (
-            <div className="px-4 py-2 text-xs text-neutral-500">showing first 500 of {rows.length}</div>
-          )}
-        </CardBody>
-      </Card>
+      <div className="space-y-2">
+        {sorted.map(([key, items]) => {
+          const isOpen = open.has(key);
+          const cat = items[0].category;
+          return (
+            <div key={key} className="overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900/30">
+              <button
+                onClick={() => toggle(key)}
+                className="flex w-full items-center gap-2 px-4 py-2.5 text-left hover:bg-neutral-900/50"
+              >
+                <ChevronRight
+                  className={cn("h-4 w-4 shrink-0 text-neutral-500 transition-transform", isOpen && "rotate-90")}
+                />
+                <span className={cn("font-medium", TONE[cat] ?? "text-neutral-200")}>{key}</span>
+                <span className="text-sm tabular-nums text-neutral-500">×{items.length}</span>
+              </button>
+              {isOpen && (
+                <div className="overflow-x-auto border-t border-neutral-800/60">
+                  <table className="w-full table-fixed text-sm">
+                    <colgroup>
+                      <col style={{ width: "42%" }} />
+                      <col style={{ width: "14%" }} />
+                      <col style={{ width: "44%" }} />
+                    </colgroup>
+                    <tbody>
+                      {items.map((r) => (
+                        <tr key={r.arn} className="border-b border-neutral-800/40 last:border-0">
+                          <td className="truncate px-4 py-1.5 text-neutral-300" title={r.arn}>
+                            {r.name}
+                          </td>
+                          <td className="truncate px-4 py-1.5 text-neutral-500">{r.region}</td>
+                          <td className="truncate px-4 py-1.5 text-neutral-500" title={r.reason}>
+                            {r.type}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
