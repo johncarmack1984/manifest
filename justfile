@@ -7,7 +7,11 @@ install:
 
 # Build the Rust Lambda (arm64) that CDK packages.
 api:
-    cd api && cargo lambda build --release --arm64
+    cd api && cargo lambda build --release --arm64 --bin manifest-api
+
+# Classify + tag the account inventory (dry-run by default; pass --apply to write).
+tag *args:
+    cd api && cargo run --quiet --bin tag -- {{args}}
 
 # Build the React SPA.
 web:

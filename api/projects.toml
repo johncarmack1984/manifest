@@ -1,0 +1,92 @@
+# manifest project registry — only what inference can't derive: liveness, protection,
+# and name->repo aliases. classify.rs handles AWS-managed + tooling + stack-name mapping;
+# this file is the thin layer of human knowledge on top.
+#
+# First match wins, so specific/protected entries come before broad ones.
+# Fields: repo, patterns (case-insensitive name/stack substrings), types (exact
+# resource types), protected (never orphan/destroy), dead (matched => orphan), reason.
+
+# ---- Protected: never flagged as orphan, never offered for deletion ----
+[[project]]
+repo = "my-infra"
+patterns = ["john-carmack-terraform-state"]
+protected = true
+
+[[project]]
+repo = "deep-freeze-archive"
+patterns = ["vegify-dropbox", "DropboxAppSecret", "lauren-urban"]
+protected = true
+
+[[project]]
+repo = "email"
+types = ["ses:identity", "ses:configuration-set"]
+protected = true
+
+[[project]]
+repo = "monitoring"
+types = ["cloudwatch:alarm", "sns:topic", "backup:backup-vault", "backup:backup-plan"]
+protected = true
+
+# ---- Dead / handed-off: matched resources are orphans ----
+[[project]]
+repo = "EMGDashboard"
+patterns = ["EMGDashboard"]
+dead = true
+reason = "handed off to EMG"
+
+[[project]]
+repo = "mapbox-poc"
+patterns = ["mapbox-poc"]
+dead = true
+reason = "destroyed; SST revalidation leftovers"
+
+[[project]]
+repo = "mic-development"
+patterns = ["mic-development", "TestMedusaBackend"]
+dead = true
+reason = "old Medusa dev backend"
+
+# ---- Live projects ----
+[[project]]
+repo = "stormdeck"
+patterns = ["stormdeck"]
+
+[[project]]
+repo = "accept-payments"
+patterns = ["accept-payments"]
+
+[[project]]
+repo = "manifest"
+patterns = ["manifest"]
+
+[[project]]
+repo = "cost-dashboard"
+patterns = ["cost-dashboard"]
+
+[[project]]
+repo = "vegify"
+patterns = ["vegify"]
+
+[[project]]
+repo = "themiscpage"
+patterns = ["themiscpage"]
+
+[[project]]
+repo = "albumclouds"
+patterns = ["albumclouds"]
+
+[[project]]
+repo = "newearth-pmtiles"
+patterns = ["newearth-pmtiles", "pmtiles"]
+
+[[project]]
+repo = "my-tauri-updater"
+patterns = ["my-tauri-updater"]
+
+[[project]]
+repo = "well-terraformed-framework"
+patterns = ["well-terraformed-framework"]
+
+[[project]]
+repo = "sentiment-analyzer"
+patterns = ["zappa-keep-warm", "sentiment"]
