@@ -207,6 +207,14 @@ export class ManifestStack extends cdk.Stack {
         resources: ['*'],
       }),
     );
+    // Resolve ACM certs' domains (they're UUID-named in Resource Explorer).
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'AcmRead',
+        actions: ['acm:DescribeCertificate'],
+        resources: ['*'],
+      }),
+    );
     fn.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'Cache',

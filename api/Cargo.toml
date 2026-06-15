@@ -18,6 +18,7 @@ aws-sdk-costexplorer = "1"
 aws-sdk-resourceexplorer2 = "1"
 aws-sdk-dynamodb = "1"
 aws-sdk-organizations = "1"
+aws-sdk-acm = "1"
 aws-sdk-resourcegroupstagging = "1"
 aws-smithy-types = "1"
 

@@ -83,7 +83,16 @@ async fn compute(s: &AppState) -> Res<Value> {
                 let arn = r.arn().unwrap_or_default().to_string();
                 let rtype = r.resource_type().unwrap_or_default().to_string();
                 let service = r.service().unwrap_or_default().to_string();
-                let name = arn.rsplit(['/', ':']).next().unwrap_or("").to_string();
+                let mut name = arn.rsplit(['/', ':']).next().unwrap_or("").to_string();
+                // ACM certs are UUID-named in Resource Explorer; surface the domain
+                // instead — both as the display name and so it classifies by project.
+                if rtype == "acm:certificate" {
+                    if let Ok(out) = s.0.acm.describe_certificate().certificate_arn(&arn).send().await {
+                        if let Some(d) = out.certificate().and_then(|c| c.domain_name()) {
+                            name = d.to_string();
+                        }
+                    }
+                }
                 let tags = tags_of(r);
                 let stack = tags.get("aws:cloudformation:stack-name").map(String::as_str);
                 let c = classify(&name, &rtype, &service, stack, &registry);

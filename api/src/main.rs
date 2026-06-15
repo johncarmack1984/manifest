@@ -31,6 +31,7 @@ pub struct Inner {
     pub re: aws_sdk_resourceexplorer2::Client,
     pub ddb: aws_sdk_dynamodb::Client,
     pub org: aws_sdk_organizations::Client,
+    pub acm: aws_sdk_acm::Client,
     pub cfg: Config,
     pub jwks: auth::JwksCache,
 }
@@ -95,6 +96,7 @@ async fn main() -> Result<(), Error> {
         re: aws_sdk_resourceexplorer2::Client::new(&shared),
         ddb: aws_sdk_dynamodb::Client::new(&shared),
         org: aws_sdk_organizations::Client::new(&shared),
+        acm: aws_sdk_acm::Client::new(&shared),
         jwks: auth::JwksCache::default(),
         cfg: Config::from_env(),
     }));

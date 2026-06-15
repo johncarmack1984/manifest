@@ -154,6 +154,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-acm"
+version = "1.106.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c86c6434233db879c3cf951b7f491edb926ee018e6931e1e2ee480974d546dd"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.2",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-costexplorer"
 version = "1.120.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1611,6 +1636,7 @@ name = "manifest-api"
 version = "0.1.0"
 dependencies = [
  "aws-config",
+ "aws-sdk-acm",
  "aws-sdk-costexplorer",
  "aws-sdk-dynamodb",
  "aws-sdk-organizations",
