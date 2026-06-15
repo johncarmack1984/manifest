@@ -15,11 +15,15 @@ export default function Cost() {
   if (error || !data) return <div className="text-sm text-red-400">Error: {error}</div>;
 
   return (
-    <Tabs.Root defaultValue="service" className="space-y-4">
+    <Tabs.Root defaultValue="account" className="space-y-4">
       <Tabs.List className="inline-flex gap-1 rounded-lg border border-neutral-800 bg-neutral-900/40 p-1">
+        <Tab value="account">By account</Tab>
         <Tab value="service">By service</Tab>
         <Tab value="region">By region</Tab>
       </Tabs.List>
+      <Tabs.Panel value="account">
+        <Breakdown periods={data.byAccount} />
+      </Tabs.Panel>
       <Tabs.Panel value="service">
         <Breakdown periods={data.byService} />
       </Tabs.Panel>

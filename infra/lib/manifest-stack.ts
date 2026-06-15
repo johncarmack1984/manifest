@@ -188,6 +188,15 @@ export class ManifestStack extends cdk.Stack {
         resources: ['*'],
       }),
     );
+    // Label per-account spend with account names (works from the org payer /
+    // delegated-admin account; harmless elsewhere).
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'OrgAccounts',
+        actions: ['organizations:ListAccounts'],
+        resources: ['*'],
+      }),
+    );
     fn.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'Cache',

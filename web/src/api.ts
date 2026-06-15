@@ -22,6 +22,7 @@ export interface RunRate {
 }
 export interface CostData {
   byService: CostPeriod[];
+  byAccount: CostPeriod[];
   byRegion: CostPeriod[];
   daily: DailyPoint[];
   forecastNextMonth: number | null;

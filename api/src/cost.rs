@@ -68,6 +68,54 @@ fn flatten_grouped(results: &[ResultByTime]) -> Value {
     json!(periods)
 }
 
+/// Account id -> name from Organizations (works from the management or a
+/// delegated-admin account). Degrades to an empty map (raw ids shown) otherwise.
+async fn account_names(s: &AppState) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let mut pages = s.0.org.list_accounts().into_paginator().send();
+    while let Some(page) = pages.next().await {
+        match page {
+            Ok(out) => {
+                for a in out.accounts() {
+                    if let (Some(id), Some(name)) = (a.id(), a.name()) {
+                        map.insert(id.to_string(), name.to_string());
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("organizations:ListAccounts unavailable: {e}");
+                break;
+            }
+        }
+    }
+    map
+}
+
+/// Replace LINKED_ACCOUNT group keys (account ids) with account names when known.
+fn relabel_accounts(periods: Value, names: &HashMap<String, String>) -> Value {
+    let Some(arr) = periods.as_array() else {
+        return periods;
+    };
+    json!(arr
+        .iter()
+        .map(|p| {
+            let mut p = p.clone();
+            if let Some(groups) = p.get_mut("groups").and_then(|g| g.as_array_mut()) {
+                for g in groups {
+                    if let Some(name) = g
+                        .get("key")
+                        .and_then(|k| k.as_str())
+                        .and_then(|id| names.get(id))
+                    {
+                        g["key"] = json!(name);
+                    }
+                }
+            }
+            p
+        })
+        .collect::<Vec<Value>>())
+}
+
 fn median(v: &[f64]) -> f64 {
     if v.is_empty() {
         return 0.0;
@@ -165,7 +213,7 @@ async fn compute(s: &AppState) -> Res<Value> {
         .0
         .ce
         .get_cost_and_usage()
-        .time_period(monthly)
+        .time_period(monthly.clone())
         .granularity(Granularity::Monthly)
         .metrics("UnblendedCost")
         .group_by(
@@ -176,6 +224,27 @@ async fn compute(s: &AppState) -> Res<Value> {
         )
         .send()
         .await?;
+
+    // Per-account spend across the org. From the management (payer) account this
+    // is every linked account via consolidated billing; account ids get relabeled
+    // with names just below. From a standalone account it's just that account.
+    let by_account = s
+        .0
+        .ce
+        .get_cost_and_usage()
+        .time_period(monthly)
+        .granularity(Granularity::Monthly)
+        .metrics("UnblendedCost")
+        .group_by(
+            GroupDefinition::builder()
+                .r#type(GroupDefinitionType::Dimension)
+                .key("LINKED_ACCOUNT")
+                .build(),
+        )
+        .send()
+        .await?;
+    let account_periods =
+        relabel_accounts(flatten_grouped(by_account.results_by_time()), &account_names(s).await);
 
     // Daily by usage-type powers the daily chart + run-rate + one-off detection.
     let daily_ut = s
@@ -236,6 +305,7 @@ async fn compute(s: &AppState) -> Res<Value> {
 
     Ok(json!({
         "byService": flatten_grouped(by_service.results_by_time()),
+        "byAccount": account_periods,
         "byRegion": region_periods,
         "daily": daily,
         "forecastNextMonth": forecast,

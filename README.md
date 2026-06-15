@@ -8,8 +8,9 @@ Deploy it into any AWS account with `just deploy`. Effectively free to run (see
 [Cost](#cost)).
 
 ## What it shows
-- **Cost** — spend by service × region × day, month-over-month, and a forecast
-  (Cost Explorer, cached in DynamoDB ~1h since CE charges $0.01/call).
+- **Cost** — spend by **account/app** (org-wide via consolidated billing), service,
+  region, and day; month-over-month plus a forecast (Cost Explorer, cached in
+  DynamoDB ~1h since CE charges $0.01/call).
 - **Inventory** — every resource in every indexed region in one filterable list
   (Resource Explorer).
 - **Cruft flags** — untagged resources, resources in regions with no recent
@@ -36,6 +37,7 @@ is **Vite + React + TypeScript**. The SPA fetches all its config from
 
 ## Prerequisites
 - An AWS account + credentials (`aws sso login` / `AWS_PROFILE=…`), admin-ish for the first deploy.
+- To see **org-wide per-account** spend, deploy into your organization's management (payer) account, or a delegated Cost Explorer admin account; from a standalone account it shows only that account.
 - A **Route53 hosted zone** you control (for the dashboard's domain + TLS cert).
 - [Rust](https://rustup.rs), [cargo-lambda](https://www.cargo-lambda.info), and [Zig](https://ziglang.org) (to cross-compile the arm64 Lambda).
 - Node 20+, [pnpm](https://pnpm.io), and [just](https://github.com/casey/just).
