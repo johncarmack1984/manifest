@@ -19,7 +19,7 @@ protected = true
 
 [[project]]
 repo = "monitoring"
-types = ["cloudwatch:alarm", "sns:topic", "backup:backup-vault", "backup:backup-plan"]
+types = ["cloudwatch:alarm", "sns:topic"]
 protected = true
 
 # ---- Dead / handed-off: matched resources are orphans ----

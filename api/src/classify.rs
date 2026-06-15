@@ -66,6 +66,8 @@ const AWS_MANAGED_TYPES: &[&str] = &[
     "elasticache:user",
     "events:event-bus",
     "xray:sampling-rule",
+    "backup:backup-plan",
+    "backup:backup-vault",
 ];
 
 /// Substrings that mark IaC/CLI tooling artifacts — owned by a stack, removed by
