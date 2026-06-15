@@ -13,6 +13,13 @@ api:
 tag *args:
     cd api && set -a && . ../infra/.env && set +a && AWS_REGION=us-east-1 cargo run --quiet --bin tag -- {{args}}
 
+# Push local projects.toml to the live registry the dashboard reads (no deploy; hit Refresh after).
+registry-push:
+    cd api && body=$(jq -Rs . projects.toml) && \
+      aws dynamodb put-item --region us-east-1 --table-name manifest-cache \
+        --item "{\"cache_key\":{\"S\":\"registry:projects.toml\"},\"body\":{\"S\":$body}}" && \
+      echo "✓ registry pushed — hit Refresh on the dashboard"
+
 # Build the React SPA.
 web:
     cd web && pnpm build

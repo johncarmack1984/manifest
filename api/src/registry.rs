@@ -31,6 +31,30 @@ impl Registry {
         toml::from_str(REGISTRY_TOML).expect("parse projects.toml")
     }
 
+    /// Hot-reloadable registry: read projects.toml from the DynamoDB config item
+    /// if present, else fall back to the embedded default. Lets attribution be
+    /// edited without a redeploy — `just registry-push` updates the item.
+    pub async fn from_dynamo(ddb: &aws_sdk_dynamodb::Client, table: &str) -> Self {
+        let got = ddb
+            .get_item()
+            .table_name(table)
+            .key(
+                "cache_key",
+                aws_sdk_dynamodb::types::AttributeValue::S("registry:projects.toml".into()),
+            )
+            .send()
+            .await;
+        if let Ok(out) = got {
+            if let Some(body) = out.item().and_then(|i| i.get("body")).and_then(|v| v.as_s().ok()) {
+                match toml::from_str(body) {
+                    Ok(r) => return r,
+                    Err(e) => tracing::warn!("DynamoDB registry parse failed, using embedded: {e}"),
+                }
+            }
+        }
+        Self::load()
+    }
+
     /// First project whose `types` contains `rtype` or whose `patterns` appear
     /// (case-insensitive) in `text` (a resource name or a CloudFormation stack name).
     pub fn match_project(&self, text: &str, rtype: &str) -> Option<&Project> {

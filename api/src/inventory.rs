@@ -66,7 +66,7 @@ fn doc_str(d: &Document) -> Option<String> {
 }
 
 async fn compute(s: &AppState) -> Res<Value> {
-    let registry = Registry::load();
+    let registry = Registry::from_dynamo(&s.0.ddb, &s.0.cfg.cache_table).await;
     let mut resources: Vec<Value> = Vec::new();
 
     for region in &s.0.cfg.indexed_regions {
