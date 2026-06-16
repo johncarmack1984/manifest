@@ -61,6 +61,13 @@ patterns = ["accept-payments"]
 repo = "manifest"
 patterns = ["manifest"]
 
+# mail-forwarder app (my-infra-private/mail-forwarder). CDK names its resources
+# "MailForwarderStack" / "mailforwarderstack-..." — no hyphen, hence the pattern.
+[[project]]
+repo = "mail-forwarder"
+patterns = ["mailforwarder"]
+protected = true
+
 [[project]]
 repo = "vegify"
 patterns = ["vegify"]
