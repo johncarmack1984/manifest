@@ -24,7 +24,10 @@ pub struct Registry {
     pub projects: Vec<Project>,
 }
 
-const REGISTRY_TOML: &str = include_str!("../projects.toml");
+// The embedded default the Lambda ships with. A real deployment overrides it at
+// runtime from DynamoDB (see `from_dynamo` / `just registry-push`); copy
+// projects.example.toml to projects.toml and push it to attribute your own account.
+const REGISTRY_TOML: &str = include_str!("../projects.example.toml");
 
 impl Registry {
     pub fn load() -> Self {
