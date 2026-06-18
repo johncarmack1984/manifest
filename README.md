@@ -58,6 +58,28 @@ temporary password emailed by Cognito; set a real one on first sign-in.
 
 Individual steps: `just api`, `just web`, `just up`, `just synth`, `just destroy`.
 
+## Continuous deployment
+Once set up, every push to `main` (a merged PR) deploys itself via GitHub Actions
+([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)) — no local `just deploy`.
+Auth is **GitHub OIDC**, so the repo stores no long-lived AWS keys.
+
+One-time setup:
+1. Configure `infra/.env` and `cdk bootstrap`, as for a manual deploy.
+2. Create the deploy role — once, with admin credentials:
+   ```sh
+   MANIFEST_GITHUB_REPO=<owner>/<repo> just ci-role
+   ```
+   It prints `CiDeployRoleArn`. Already have a GitHub OIDC provider in the account?
+   Pass `MANIFEST_GITHUB_OIDC_ARN=<arn>` to reuse it (only one is allowed per account).
+3. In the repo's **Settings → Secrets and variables → Actions → Variables**, add
+   `AWS_DEPLOY_ROLE_ARN` (the printed ARN) and your `MANIFEST_*` config
+   (`MANIFEST_DOMAIN_NAME`, `MANIFEST_HOSTED_ZONE_ID`, `MANIFEST_HOSTED_ZONE_NAME`,
+   `MANIFEST_COGNITO_DOMAIN_PREFIX`, `MANIFEST_OWNER_EMAIL`, plus any optionals).
+
+These are repo **Variables**, not Secrets — none are sensitive. Until `AWS_DEPLOY_ROLE_ARN`
+is set the deploy job is skipped, so `main` stays green on a fresh fork. The deploy role
+can only assume the account's CDK bootstrap roles (to run `cdk deploy`) and nothing else.
+
 ## Authentication
 Out of the box, sign-in uses a Cognito Hosted UI with one admin-created user
 (`MANIFEST_OWNER_EMAIL`); Cognito emails a temporary password on first deploy.

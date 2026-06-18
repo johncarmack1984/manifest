@@ -43,6 +43,13 @@ synth:
 member-deploy:
     cd infra && MANIFEST_MEMBER_DEPLOY=1 pnpm exec cdk deploy '*Member' --require-approval never
 
+# Deploy the GitHub Actions CI deploy role (OIDC) into THIS account. Run once with admin
+# credentials, then set the printed role ARN as the repo variable AWS_DEPLOY_ROLE_ARN.
+# Reuse an existing GitHub OIDC provider with MANIFEST_GITHUB_OIDC_ARN if you have one.
+#   MANIFEST_GITHUB_REPO=owner/repo just ci-role
+ci-role:
+    cd infra && MANIFEST_CI_DEPLOY=1 pnpm exec cdk deploy '*Ci' --require-approval never
+
 # Full build + deploy.
 deploy: install api web up
 
