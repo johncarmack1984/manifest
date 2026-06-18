@@ -13,6 +13,12 @@ api:
 tag *args:
     cd api && set -a && . ../infra/.env && set +a && AWS_REGION=us-east-1 cargo run --quiet --bin tag -- {{args}}
 
+# Delete resources you flagged "mark for deletion" in the dashboard. Dry-run by default;
+# `just reap --apply` deletes (per-resource confirm), `--yes` skips confirms. Runs with
+# YOUR credentials; refuses CFN/CDK stack members + protected resources. See the README.
+reap *args:
+    cd api && set -a && . ../infra/.env && set +a && AWS_REGION=us-east-1 cargo run --quiet --bin reap -- {{args}}
+
 # Push your local projects.toml to the live registry the dashboard reads (no deploy; hit
 # Refresh after). projects.toml is gitignored — copy projects.example.toml and edit it.
 registry-push:

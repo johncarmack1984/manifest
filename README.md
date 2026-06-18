@@ -127,6 +127,24 @@ AWS_PROFILE=<member-profile> MANIFEST_PAYER_ACCOUNT=<payer-account-id> just memb
 ```
 The role grants only read-only Resource Explorer + `acm:DescribeCertificate`, and trusts the payer account (the actual caller is gated by the Lambda's narrow `sts:AssumeRole` grant). Each member account must have **Resource Explorer enabled** (an index + default view) in the regions you want covered. Accounts that can't be reached (role not yet deployed, or no Resource Explorer) show as a "not inventoried" banner rather than silently vanishing. Set `MANIFEST_MEMBER_ROLE=""` to disable and inventory only the dashboard's own account.
 
+## Reaping marked resources
+**Mark for deletion** in the Inventory view only records intent in DynamoDB — it deletes
+nothing. To actually delete the marked resources, run the operator tool with your own
+admin credentials:
+```sh
+just reap            # dry run: what would be deleted, refused, or skipped
+just reap --apply    # delete, confirming each one (--yes to skip the confirms)
+```
+The dashboard Lambda has **no** delete permissions; `reap` runs locally as you, so
+destruction is always a deliberate, reviewable, local step. It **refuses** to delete
+CloudFormation/CDK stack members (destroy the stack via its IaC instead) and anything
+classified `protected`, and only deletes a curated set of standalone types — IAM
+roles/users/policies, Lambda functions, log groups, DynamoDB tables, SNS topics, SES
+identities, CloudWatch alarms, S3 buckets — reporting everything else rather than
+touching it. A successful delete clears the resource's mark. Needs the AWS CLI on PATH;
+set `MANIFEST_RESOURCE_EXPLORER_VIEW_ARN` (the `ResourceExplorerViewArn` stack output) in
+`infra/.env` so the scan covers every region.
+
 ## Cost
 Effectively free: Lambda + DynamoDB on-demand + Resource Explorer (free) +
 CloudFront/S3 pennies. The only metered call is Cost Explorer ($0.01/request),
