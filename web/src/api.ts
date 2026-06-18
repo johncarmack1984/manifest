@@ -65,6 +65,8 @@ export interface InventoryData {
   byAccount?: Record<string, number>;
   /** Current-month spend per app key (keys match accordion keys); best-effort. */
   byAppCost?: Record<string, number>;
+  /** Every app defined in the registry — so the picker can show them even when empty. */
+  apps?: string[];
   flags: { orphans: number; unclaimed: number; marked: number; notIndexed?: NotIndexed[] };
   indexedRegions: string[];
   generatedAt: string;
@@ -107,7 +109,7 @@ async function post<T>(path: string, token: string | undefined, body: unknown): 
     body: payload,
   });
   if (r.status === 401) throw new Error("unauthorized");
-  if (!r.ok) throw new Error(`${path} returned ${r.status}`);
+  if (!r.ok) throw new Error((await r.text().catch(() => "")) || `${path} returned ${r.status}`);
   return r.json();
 }
 
@@ -119,6 +121,17 @@ export const reclassify = (token: string | undefined, arns: string[], app: strin
  *  the operator-run reap tool performs the actual deletion. */
 export const setMarked = (token: string | undefined, arns: string[], marked: boolean) =>
   post<{ ok: boolean; count: number }>("/api/inventory/mark", token, { arns, marked });
+
+export interface NewApp {
+  repo: string;
+  patterns?: string[];
+  protected?: boolean;
+  dead?: boolean;
+  reason?: string;
+}
+/** Add an app to the project registry (persists; the next inventory load reflects it). */
+export const addApp = (token: string | undefined, app: NewApp) =>
+  post<{ ok: boolean; repo: string }>("/api/registry/app", token, app);
 
 /** Force the API to recompute (bypass the 1h server cache), then callers reload. */
 export async function bustCache(token: string | undefined) {

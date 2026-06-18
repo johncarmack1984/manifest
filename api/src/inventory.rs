@@ -399,6 +399,7 @@ async fn compute(s: &AppState) -> Res<Value> {
         "byCategory": by_category,
         "byAccount": by_account,
         "byAppCost": app_cost,
+        "apps": registry.projects.iter().map(|p| p.repo.as_str()).collect::<std::collections::BTreeSet<_>>(),
         "flags": {
             "orphans": by_category.get("orphan").copied().unwrap_or(0),
             "unclaimed": by_category.get("unclaimed").copied().unwrap_or(0),

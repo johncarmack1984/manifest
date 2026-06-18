@@ -29,6 +29,13 @@ registry-push:
         --item "{\"cache_key\":{\"S\":\"registry:projects.toml\"},\"body\":{\"S\":$body}}" && \
       echo "✓ registry pushed — hit Refresh on the dashboard"
 
+# Pull the LIVE registry (DynamoDB — includes apps added from the dashboard) back to
+# projects.toml so you can commit it. The inverse of registry-push.
+registry-pull:
+    cd api && aws dynamodb get-item --region us-east-1 --table-name manifest-cache \
+      --key '{"cache_key":{"S":"registry:projects.toml"}}' --query 'Item.body.S' --output text > projects.toml \
+      && echo "✓ pulled live registry → api/projects.toml"
+
 # Build the React SPA.
 web:
     cd web && pnpm build

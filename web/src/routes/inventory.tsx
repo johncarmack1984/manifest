@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronRight, ExternalLink } from "lucide-react";
 import { useAuth } from "react-oidc-context";
-import { getInventory, reclassify, setMarked, type InventoryData, type ResourceRow } from "../api";
+import { addApp, getInventory, reclassify, setMarked, type InventoryData, type ResourceRow } from "../api";
 import { Stat, Spinner, Button } from "../components/ui";
 import { cn, usd } from "../lib/utils";
 import { consoleUrl } from "../lib/console";
@@ -30,6 +30,11 @@ export default function Inventory() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [target, setTarget] = useState("");
   const [actionError, setActionError] = useState("");
+
+  // Add-app form.
+  const [showAddApp, setShowAddApp] = useState(false);
+  const [newApp, setNewApp] = useState({ repo: "", patterns: "", protected: false });
+  const [addAppError, setAddAppError] = useState("");
 
   // Initial load (and on sign-in). Mutations update local state directly, so this
   // only runs once per token — no full reload on every change.
@@ -69,7 +74,10 @@ export default function Inventory() {
   const orphans = inv.resources.filter((r) => r.category === "orphan").length;
   const unclaimed = inv.resources.filter((r) => r.category === "unclaimed").length;
   const markedCount = inv.resources.filter((r) => r.mark).length;
-  const appNames = [...new Set(inv.resources.map((r) => r.app).filter(Boolean))].sort() as string[];
+  // Picker shows every defined app (registry) plus any in use on a resource.
+  const appNames = [
+    ...new Set([...(inv.apps ?? []), ...inv.resources.map((r) => r.app)].filter(Boolean) as string[]),
+  ].sort();
 
   const filtered = inv.resources.filter(
     (r) =>
@@ -160,6 +168,24 @@ export default function Inventory() {
       (r) => ({ ...r, mark: marked ? "marked" : null }),
     );
 
+  const submitAddApp = async () => {
+    const repo = newApp.repo.trim();
+    if (!repo) return;
+    setAddAppError("");
+    try {
+      await addApp(token, {
+        repo,
+        patterns: newApp.patterns.split(",").map((s) => s.trim()).filter(Boolean),
+        protected: newApp.protected,
+      });
+      setShowAddApp(false);
+      setNewApp({ repo: "", patterns: "", protected: false });
+      await refresh();
+    } catch (e) {
+      setAddAppError(String(e instanceof Error ? e.message : e));
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
@@ -227,8 +253,51 @@ export default function Inventory() {
         >
           {allOpen ? "Collapse all" : "Expand all"}
         </button>
+        <button
+          onClick={() => setShowAddApp((v) => !v)}
+          className="rounded-md border border-neutral-800 px-3 py-1.5 text-sm text-neutral-400 hover:text-neutral-200"
+        >
+          + Add app
+        </button>
         {refreshing && <span className="text-xs text-neutral-500">updating…</span>}
       </div>
+
+      {showAddApp && (
+        <div className="flex flex-wrap items-end gap-3 rounded-lg border border-neutral-800 bg-neutral-900/40 px-4 py-3">
+          <label className="flex flex-col gap-1 text-xs text-neutral-500">
+            app name
+            <input
+              autoFocus
+              value={newApp.repo}
+              onChange={(e) => setNewApp({ ...newApp, repo: e.target.value })}
+              placeholder="my-new-app"
+              className="w-48 rounded-md border border-neutral-700 bg-neutral-900/60 px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-neutral-500"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-neutral-500">
+            match patterns (optional, comma-separated)
+            <input
+              value={newApp.patterns}
+              onChange={(e) => setNewApp({ ...newApp, patterns: e.target.value })}
+              placeholder="my-new-app, mynewapp"
+              className="w-64 rounded-md border border-neutral-700 bg-neutral-900/60 px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-neutral-500"
+            />
+          </label>
+          <label className="flex cursor-pointer select-none items-center gap-2 pb-1.5 text-sm text-neutral-400">
+            <input
+              type="checkbox"
+              checked={newApp.protected}
+              onChange={(e) => setNewApp({ ...newApp, protected: e.target.checked })}
+              className="accent-neutral-300"
+            />
+            protected
+          </label>
+          <Button disabled={!newApp.repo.trim()} onClick={submitAddApp} className="mb-0.5">
+            Add
+          </Button>
+          {addAppError && <span className="pb-1.5 text-sm text-red-400">{addAppError}</span>}
+        </div>
+      )}
 
       {actionError && (
         <div className="rounded-lg border border-red-900/50 bg-red-950/20 px-4 py-2.5 text-sm text-red-300">
