@@ -1,0 +1,51 @@
+# manifest project registry — the thin layer of human knowledge that inference can't
+# derive: liveness, protection, and name->repo aliases. classify.rs already handles
+# AWS-managed services, tooling, and CloudFormation stack-name mapping; this file only
+# adds what a machine can't know about YOUR account.
+#
+# Getting started: copy this file to `projects.toml` (gitignored), edit it for your
+# account, then `just registry-push` to load it into the live dashboard — no redeploy,
+# just hit Refresh. The committed default the Lambda ships with is this example.
+#
+# First match wins, so specific/protected entries come before broad ones.
+# Fields:
+#   repo       — the repo/app a matched resource belongs to (shown in the UI)
+#   patterns   — case-insensitive substrings matched against a resource or stack name
+#   types      — exact resource types (e.g. "cloudwatch:alarm") matched regardless of name
+#   protected  — never flagged as an orphan or offered for deletion
+#   dead       — matched resources are treated as orphans (decommissioned/handed off)
+#   reason     — free text shown alongside dead/orphan resources
+
+# ---- Protected: never flagged as orphan, never offered for deletion ----
+[[project]]
+repo = "my-infra"
+patterns = ["terraform-state"]   # e.g. your Terraform state bucket
+protected = true
+
+[[project]]
+repo = "monitoring"
+types = ["cloudwatch:alarm", "sns:topic"]
+protected = true
+
+# ---- Dead / handed-off: matched resources are surfaced as orphans ----
+[[project]]
+repo = "old-prototype"
+patterns = ["old-prototype", "legacy-poc"]
+dead = true
+reason = "decommissioned; leftover resources safe to delete"
+
+# ---- Live projects: map names/stacks to a repo for attribution ----
+[[project]]
+repo = "example-api"
+patterns = ["example-api"]
+
+[[project]]
+repo = "example-web"
+patterns = ["example-web", "examplewebstack"]   # CDK strips hyphens from stack names
+
+# Email/domain resources classify to the app they serve. Place these AFTER the
+# specific apps so e.g. app.example.com still matches its app first.
+[[project]]
+repo = "example.com"
+patterns = ["example.com", "you@example.com"]
+protected = true
