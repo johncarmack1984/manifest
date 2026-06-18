@@ -51,10 +51,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let apply = args.iter().any(|a| a == "--apply");
     let yes = args.iter().any(|a| a == "--yes");
 
-    let reg = Registry::load();
     let shared = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let re = aws_sdk_resourceexplorer2::Client::new(&shared);
     let ddb = aws_sdk_dynamodb::Client::new(&shared);
+
+    let cache_table = std::env::var("CACHE_TABLE")
+        .unwrap_or_else(|_| format!("{}-cache", std::env::var("MANIFEST_NAME").unwrap_or_else(|_| "manifest".into())));
+    // A DELETER must classify against the LIVE registry — the embedded example doesn't
+    // know what's protected, so silently falling back to it would disable the
+    // protected-resource guard (the bug that let a protected bucket be deleted). Refuse
+    // to run without it.
+    let reg = match Registry::try_from_dynamo(&ddb, &cache_table).await {
+        Some(r) => r,
+        None => {
+            eprintln!(
+                "refusing to reap: couldn't load the live registry from DynamoDB ({cache_table}). \
+                 Run `just registry-push` first so the protected-resource guard is accurate."
+            );
+            std::process::exit(1);
+        }
+    };
 
     let view_arn = std::env::var("MANIFEST_RESOURCE_EXPLORER_VIEW_ARN").unwrap_or_default();
     if view_arn.is_empty() {
