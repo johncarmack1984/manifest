@@ -123,6 +123,7 @@ async fn main() -> Result<(), Error> {
         .route("/api/cost", get(cost::handler))
         .route("/api/inventory", get(inventory::handler))
         .route("/api/inventory/classify", post(inventory::reclassify))
+        .route("/api/inventory/mark", post(inventory::mark))
         .with_state(state);
 
     run(app).await

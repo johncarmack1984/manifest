@@ -225,6 +225,81 @@ async fn scan_member(
     }
 }
 
+/// Current-month spend grouped by app, derived from the CloudFormation stack-name
+/// cost-allocation tag (each stack → its app via the same registry; unmatched stacks
+/// roll up to "unclaimed", resources with no stack to "untagged"). Best-effort: it
+/// needs that tag activated in Billing, and CE charges $0.01/call, so it rides the 1h
+/// inventory cache. Returns an empty map (no per-app cost shown) on any error.
+async fn app_cost(s: &AppState, registry: &Registry) -> std::collections::BTreeMap<String, f64> {
+    use aws_sdk_costexplorer::types::{
+        DateInterval, Granularity, GroupDefinition, GroupDefinitionType,
+    };
+    use chrono::Datelike;
+
+    let mut out: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+    let today = chrono::Utc::now().date_naive();
+    let start = today.with_day(1).unwrap_or(today).format("%Y-%m-%d").to_string();
+    let end = (today + chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+    let Ok(interval) = DateInterval::builder().start(start).end(end).build() else {
+        return out;
+    };
+
+    let resp = s
+        .0
+        .ce
+        .get_cost_and_usage()
+        .time_period(interval)
+        .granularity(Granularity::Monthly)
+        .metrics("UnblendedCost")
+        .group_by(
+            GroupDefinition::builder()
+                .r#type(GroupDefinitionType::Tag)
+                .key("aws:cloudformation:stack-name")
+                .build(),
+        )
+        .send()
+        .await;
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                "per-app cost unavailable (activate the aws:cloudformation:stack-name \
+                 cost-allocation tag in Billing?): {e}"
+            );
+            return out;
+        }
+    };
+
+    for period in resp.results_by_time() {
+        for g in period.groups() {
+            // For a TAG group the key is the tag value; be defensive about a
+            // "tagkey$tagvalue" form too. Empty value ⇒ the resource has no stack.
+            let raw = g.keys().first().cloned().unwrap_or_default();
+            let stack = raw.rsplit('$').next().unwrap_or(&raw).to_string();
+            let amt = g
+                .metrics()
+                .and_then(|m| m.get("UnblendedCost"))
+                .and_then(|v| v.amount())
+                .unwrap_or("0")
+                .parse::<f64>()
+                .unwrap_or(0.0);
+            if amt <= 0.0 {
+                continue;
+            }
+            let app = if stack.is_empty() {
+                "untagged".to_string()
+            } else {
+                registry
+                    .match_project(&stack, "")
+                    .map(|p| p.repo.clone())
+                    .unwrap_or_else(|| "unclaimed".to_string())
+            };
+            *out.entry(app).or_default() += amt;
+        }
+    }
+    out
+}
+
 async fn compute(s: &AppState) -> Res<Value> {
     let registry = Registry::from_dynamo(&s.0.ddb, &s.0.cfg.cache_table).await;
     let regions = scan_regions(&s.0.cfg.indexed_regions);
@@ -268,20 +343,26 @@ async fn compute(s: &AppState) -> Res<Value> {
         }
     }
 
-    // 3. Apply durable operator state: a manual classification override wins over inference.
-    let overrides = crate::state::load(s).await;
-    if !overrides.is_empty() {
+    // 3. Apply durable operator state: a manual classification override wins over
+    //    inference, and a deletion mark is surfaced for the UI / reaper.
+    let state = crate::state::load(s).await;
+    if !state.is_empty() {
         for r in &mut resources {
             let arn = r["arn"].as_str().unwrap_or_default().to_string();
-            let Some(app) = overrides.get(&arn).and_then(|st| st.app.as_ref()) else {
+            let Some(st) = state.get(&arn) else {
                 continue;
             };
-            let proj = registry.projects.iter().find(|p| &p.repo == app);
-            r["app"] = json!(app);
-            r["category"] = json!(if proj.is_some_and(|p| p.dead) { "orphan" } else { "app" });
-            r["protected"] = json!(proj.is_some_and(|p| p.protected));
-            r["reason"] = json!(format!("manually assigned to '{app}'"));
-            r["override"] = json!(true);
+            if let Some(app) = &st.app {
+                let proj = registry.projects.iter().find(|p| &p.repo == app);
+                r["app"] = json!(app);
+                r["category"] = json!(if proj.is_some_and(|p| p.dead) { "orphan" } else { "app" });
+                r["protected"] = json!(proj.is_some_and(|p| p.protected));
+                r["reason"] = json!(format!("manually assigned to '{app}'"));
+                r["override"] = json!(true);
+            }
+            if let Some(mark) = &st.mark {
+                r["mark"] = json!(mark);
+            }
         }
     }
 
@@ -304,6 +385,12 @@ async fn compute(s: &AppState) -> Res<Value> {
         *by_account.entry(acct).or_default() += 1;
     }
 
+    let marked = resources
+        .iter()
+        .filter(|r| r.get("mark").and_then(|m| m.as_str()).is_some())
+        .count();
+    let app_cost = app_cost(s, &registry).await;
+
     Ok(json!({
         "count": resources.len(),
         "resources": resources,
@@ -311,9 +398,11 @@ async fn compute(s: &AppState) -> Res<Value> {
         "byApp": by_app,
         "byCategory": by_category,
         "byAccount": by_account,
+        "byAppCost": app_cost,
         "flags": {
             "orphans": by_category.get("orphan").copied().unwrap_or(0),
             "unclaimed": by_category.get("unclaimed").copied().unwrap_or(0),
+            "marked": marked,
             "notIndexed": not_indexed,
         },
         "indexedRegions": s.0.cfg.indexed_regions,
@@ -350,4 +439,32 @@ pub async fn reclassify(
         }
     }
     Ok(Json(json!({ "ok": true, "count": req.arns.len(), "app": app })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct MarkReq {
+    /// Resources to (un)mark, by ARN.
+    pub arns: Vec<String>,
+    /// True to flag for deletion, false to clear the flag.
+    pub marked: bool,
+}
+
+/// Flag resources for deletion (or clear the flag). This only records intent in the
+/// state table — nothing is destroyed here. The operator-run reap tool consumes the
+/// marks and performs the deletion with its own credentials.
+pub async fn mark(
+    State(s): State<AppState>,
+    _u: AuthUser,
+    Json(req): Json<MarkReq>,
+) -> Result<Json<Value>, StatusCode> {
+    if s.0.cfg.state_table.is_empty() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    for arn in &req.arns {
+        if let Err(e) = crate::state::set_mark(&s, arn, req.marked).await {
+            tracing::error!("mark {arn} failed: {e}");
+            return Err(StatusCode::BAD_GATEWAY);
+        }
+    }
+    Ok(Json(json!({ "ok": true, "count": req.arns.len(), "marked": req.marked })))
 }

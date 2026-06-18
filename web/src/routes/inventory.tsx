@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { ChevronRight, ExternalLink } from "lucide-react";
 import { useAuth } from "react-oidc-context";
-import { getInventory, reclassify, type ResourceRow } from "../api";
+import { getInventory, reclassify, setMarked, type ResourceRow } from "../api";
 import { useAsync } from "../lib/useAsync";
 import { Stat, Spinner, Button } from "../components/ui";
-import { cn } from "../lib/utils";
+import { cn, usd } from "../lib/utils";
 import { consoleUrl } from "../lib/console";
 
 // Group-header tint when a group isn't a normal app (draws the eye to cruft).
@@ -26,6 +26,7 @@ export default function Inventory() {
   const [region, setRegion] = useState("all");
   const [account, setAccount] = useState("all");
   const [hideNoise, setHideNoise] = useState(true);
+  const [onlyMarked, setOnlyMarked] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
 
   // Bulk reclassification.
@@ -44,6 +45,7 @@ export default function Inventory() {
   const filtered = data.resources.filter(
     (r) =>
       (!hideNoise || !isNoise(r.category)) &&
+      (!onlyMarked || !!r.mark) &&
       (region === "all" || r.region === region) &&
       (account === "all" || r.accountName === account || r.account === account) &&
       (q === "" || `${r.arn} ${r.type} ${r.name}`.toLowerCase().includes(q.toLowerCase())),
@@ -89,12 +91,11 @@ export default function Inventory() {
       return n;
     });
 
-  const apply = async (app: string | null) => {
-    if (selected.size === 0) return;
+  const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setActionError("");
     try {
-      await reclassify(token, [...selected], app);
+      await fn();
       setSelected(new Set());
       setTarget("");
       reload();
@@ -104,13 +105,20 @@ export default function Inventory() {
       setBusy(false);
     }
   };
+  const apply = (app: string | null) => {
+    if (selected.size > 0) run(() => reclassify(token, [...selected], app));
+  };
+  const markSelected = (marked: boolean) => {
+    if (selected.size > 0) run(() => setMarked(token, [...selected], marked));
+  };
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         <Stat label="Resources" value={data.count} />
         <Stat label="Orphans" value={data.flags.orphans} sub="dead / handed-off" />
         <Stat label="Unclaimed" value={data.flags.unclaimed} sub="needs attribution" />
+        <Stat label="Marked" value={data.flags.marked ?? 0} sub="queued for reap" />
         <Stat label="Apps" value={Object.keys(data.byApp).length} />
       </div>
 
@@ -155,6 +163,15 @@ export default function Inventory() {
             className="accent-neutral-300"
           />
           Hide AWS-managed + tooling
+        </label>
+        <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-neutral-400">
+          <input
+            type="checkbox"
+            checked={onlyMarked}
+            onChange={(e) => setOnlyMarked(e.target.checked)}
+            className="accent-red-400"
+          />
+          Only marked
         </label>
         <button
           onClick={toggleAll}
@@ -203,6 +220,22 @@ export default function Inventory() {
           >
             Clear override
           </button>
+          <span className="h-4 w-px bg-neutral-700" />
+          <button
+            onClick={() => markSelected(true)}
+            disabled={busy}
+            className="text-sm text-red-400 hover:text-red-300 disabled:opacity-50"
+            title="Flag for deletion — the reap tool deletes marked resources (nothing is deleted here)"
+          >
+            Mark for deletion
+          </button>
+          <button
+            onClick={() => markSelected(false)}
+            disabled={busy}
+            className="text-sm text-neutral-400 hover:text-neutral-200 disabled:opacity-50"
+          >
+            Unmark
+          </button>
           <button
             onClick={() => setSelected(new Set())}
             className="text-sm text-neutral-500 hover:text-neutral-300"
@@ -229,6 +262,14 @@ export default function Inventory() {
                 />
                 <span className={cn("font-medium", TONE[cat] ?? "text-neutral-200")}>{key}</span>
                 <span className="text-sm tabular-nums text-neutral-500">×{items.length}</span>
+                {data.byAppCost?.[key] != null && (
+                  <span
+                    className="ml-auto text-sm tabular-nums text-neutral-400"
+                    title="current-month spend attributed via the CloudFormation stack-name tag"
+                  >
+                    {usd(data.byAppCost[key])}/mo
+                  </span>
+                )}
               </button>
               {isOpen && (
                 <div className="overflow-x-auto border-t border-neutral-800/60">
@@ -261,7 +302,13 @@ export default function Inventory() {
                       {items.map((r) => {
                         const url = consoleUrl(r);
                         return (
-                          <tr key={r.arn} className="border-b border-neutral-800/40 last:border-0 hover:bg-neutral-900/40">
+                          <tr
+                            key={r.arn}
+                            className={cn(
+                              "border-b border-neutral-800/40 last:border-0 hover:bg-neutral-900/40",
+                              r.mark && "bg-red-950/20",
+                            )}
+                          >
                             <td className="px-3 py-1.5">
                               <input
                                 type="checkbox"
@@ -276,6 +323,11 @@ export default function Inventory() {
                               {r.override && (
                                 <span className="ml-1.5 text-[10px] uppercase tracking-wide text-sky-400" title="manually classified">
                                   override
+                                </span>
+                              )}
+                              {r.mark && (
+                                <span className="ml-1.5 text-[10px] uppercase tracking-wide text-red-400" title="marked for deletion">
+                                  marked
                                 </span>
                               )}
                             </td>
