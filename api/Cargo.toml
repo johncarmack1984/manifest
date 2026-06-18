@@ -32,6 +32,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
 thiserror = "2"
+toml_edit = "0.22"
 
 [profile.release]
 opt-level = "z"

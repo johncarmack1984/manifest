@@ -124,6 +124,7 @@ async fn main() -> Result<(), Error> {
         .route("/api/inventory", get(inventory::handler))
         .route("/api/inventory/classify", post(inventory::reclassify))
         .route("/api/inventory/mark", post(inventory::mark))
+        .route("/api/registry/app", post(add_app))
         .with_state(state);
 
     run(app).await
@@ -131,6 +132,22 @@ async fn main() -> Result<(), Error> {
 
 async fn health() -> Json<Value> {
     Json(json!({ "ok": true }))
+}
+
+// Add an app to the live project registry (auth required; single-user pool ⇒ owner).
+// Persists to DynamoDB so the next inventory load hot-reloads it.
+async fn add_app(
+    State(s): State<AppState>,
+    _u: auth::AuthUser,
+    Json(req): Json<manifest_api::registry::NewApp>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    match manifest_api::registry::add_app(&s.0.ddb, &s.0.cfg.cache_table, &req).await {
+        Ok(()) => Ok(Json(json!({ "ok": true, "repo": req.repo.trim() }))),
+        Err(e) => {
+            tracing::warn!("add_app failed: {e}");
+            Err((axum::http::StatusCode::UNPROCESSABLE_ENTITY, e))
+        }
+    }
 }
 
 // Public: lets the SPA bootstrap its Cognito login without a rebuild.
