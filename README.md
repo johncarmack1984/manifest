@@ -84,6 +84,18 @@ Each extra region gets its own tiny `RegionIndexStack`. Cost views always cover
 *all* regions regardless; spend in a region you haven't indexed is flagged as a
 blind spot.
 
+## Project registry
+manifest infers most attribution (AWS-managed services, tooling, CloudFormation
+stack names) on its own. The bit it *can't* infer — which resources are dead vs.
+protected, and name→repo aliases — lives in a small `projects.toml`. The repo ships
+[`api/projects.example.toml`](api/projects.example.toml) (the embedded default); copy
+it to `api/projects.toml` (gitignored), edit for your account, and load it live:
+```sh
+just registry-push   # writes it to the DynamoDB cache; hit Refresh — no redeploy
+```
+The dashboard reads the registry from DynamoDB and falls back to the embedded default,
+so attribution is editable without a deploy.
+
 ## Cross-account inventory
 Cost is org-wide automatically (consolidated billing covers every linked account), but **inventory is per-account** — Resource Explorer only sees the account it's queried in. So to inventory other org accounts, manifest assumes a read-only role in each one. The Lambda enumerates the org's accounts (`organizations:ListAccounts`) and, for each, assumes `MANIFEST_MEMBER_ROLE` (default `ManifestInventoryRole`) to sweep that account's regions; resources are tagged with their owning account and filterable in the UI.
 

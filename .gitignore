@@ -15,6 +15,10 @@ infra/cdk-outputs.json
 infra/.env
 **/.env
 
+# Your real project registry — ships generic as projects.example.toml; your edited
+# copy stays local (push it live with `just registry-push`).
+api/projects.toml
+
 # misc
 .DS_Store
 *.log
