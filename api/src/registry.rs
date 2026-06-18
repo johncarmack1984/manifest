@@ -61,6 +61,22 @@ impl Registry {
         Self::load()
     }
 
+    /// Like `from_dynamo`, but returns `None` when the live registry item is absent or
+    /// unparseable instead of falling back to the embedded example. Tools that ACT on
+    /// classification (the reaper) must refuse to run without the real registry —
+    /// otherwise their protected-resource guard would check the wrong data.
+    pub async fn try_from_dynamo(ddb: &aws_sdk_dynamodb::Client, table: &str) -> Option<Self> {
+        let out = ddb
+            .get_item()
+            .table_name(table)
+            .key("cache_key", aws_sdk_dynamodb::types::AttributeValue::S(REGISTRY_KEY.into()))
+            .send()
+            .await
+            .ok()?;
+        let body = out.item().and_then(|i| i.get("body")).and_then(|v| v.as_s().ok())?;
+        toml::from_str(body).ok()
+    }
+
     /// First project whose `types` contains `rtype` or whose `patterns` appear
     /// (case-insensitive) in `text` (a resource name or a CloudFormation stack name).
     pub fn match_project(&self, text: &str, rtype: &str) -> Option<&Project> {

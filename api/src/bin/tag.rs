@@ -41,9 +41,13 @@ impl Row {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let apply = std::env::args().any(|a| a == "--apply");
-    let reg = Registry::load();
     let shared = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let re = aws_sdk_resourceexplorer2::Client::new(&shared);
+    let ddb = aws_sdk_dynamodb::Client::new(&shared);
+    let cache_table = std::env::var("CACHE_TABLE")
+        .unwrap_or_else(|_| format!("{}-cache", std::env::var("MANIFEST_NAME").unwrap_or_else(|_| "manifest".into())));
+    // Classify against the live registry, not the embedded example (which would mislabel).
+    let reg = Registry::from_dynamo(&ddb, &cache_table).await;
 
     let view_arn = std::env::var("MANIFEST_RESOURCE_EXPLORER_VIEW_ARN").unwrap_or_default();
     let regions: Vec<String> = std::env::var("MANIFEST_INDEXED_REGIONS")
