@@ -1,11 +1,16 @@
 mod auth;
 mod cost;
 mod inventory;
+mod state;
 
 use std::sync::Arc;
 
 use aws_sdk_dynamodb::types::AttributeValue;
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{
+    extract::State,
+    routing::{get, post},
+    Json, Router,
+};
 use chrono::Utc;
 use lambda_http::{run, Error};
 use serde_json::{json, Value};
@@ -41,6 +46,8 @@ pub struct Inner {
 
 pub struct Config {
     pub cache_table: String,
+    /// Durable per-resource operator state (overrides + deletion marks).
+    pub state_table: String,
     pub cache_ttl: i64,
     pub view_arn: String,
     pub indexed_regions: Vec<String>,
@@ -61,6 +68,7 @@ impl Config {
         let var = |k: &str| std::env::var(k).unwrap_or_default();
         Config {
             cache_table: var("CACHE_TABLE"),
+            state_table: var("STATE_TABLE"),
             cache_ttl: var("CACHE_TTL_SECONDS").parse().unwrap_or(3600),
             view_arn: var("RESOURCE_EXPLORER_VIEW_ARN"),
             indexed_regions: var("INDEXED_REGIONS")
@@ -114,6 +122,7 @@ async fn main() -> Result<(), Error> {
         .route("/api/config", get(public_config))
         .route("/api/cost", get(cost::handler))
         .route("/api/inventory", get(inventory::handler))
+        .route("/api/inventory/classify", post(inventory::reclassify))
         .with_state(state);
 
     run(app).await

@@ -45,6 +45,8 @@ export interface ResourceRow {
   /** Owning AWS account id, and its org name (or "this account" for the local one). */
   account?: string;
   accountName?: string;
+  /** True when its app came from a manual classification override. */
+  override?: boolean;
 }
 /** An org member account the API tried but couldn't inventory (no role / no RE). */
 export interface NotIndexed {
@@ -77,8 +79,23 @@ async function get<T>(path: string, token: string | undefined): Promise<T> {
 }
 
 export const getCost = (token: string | undefined) => get<CostData>("/api/cost", token);
-export const getInventory = (token: string | undefined) =>
-  get<InventoryData>("/api/inventory", token);
+export const getInventory = (token: string | undefined, refresh = false) =>
+  get<InventoryData>(`/api/inventory${refresh ? "?refresh=1" : ""}`, token);
+
+async function post<T>(path: string, token: string | undefined, body: unknown): Promise<T> {
+  const r = await fetch(path, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (r.status === 401) throw new Error("unauthorized");
+  if (!r.ok) throw new Error(`${path} returned ${r.status}`);
+  return r.json();
+}
+
+/** Attribute resources to an app, or pass null to clear the override (back to inferred). */
+export const reclassify = (token: string | undefined, arns: string[], app: string | null) =>
+  post<{ ok: boolean; count: number }>("/api/inventory/classify", token, { arns, app });
 
 /** Force the API to recompute (bypass the 1h server cache), then callers reload. */
 export async function bustCache(token: string | undefined) {

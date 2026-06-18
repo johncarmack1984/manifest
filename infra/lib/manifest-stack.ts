@@ -67,6 +67,18 @@ export class ManifestStack extends cdk.Stack {
     });
 
     // ---------------------------------------------------------------------
+    // Durable operator state: per-resource classification overrides + deletion
+    // marks, keyed by ARN. Separate from the ephemeral cache and RETAINed so a
+    // teardown/redeploy never silently discards manual attribution work.
+    // ---------------------------------------------------------------------
+    const stateTable = new dynamodb.Table(this, 'State', {
+      tableName: `${cfg.name}-state`,
+      partitionKey: { name: 'arn', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // ---------------------------------------------------------------------
     // Cognito Hosted UI (authorization code + PKCE). One admin-created user;
     // the SPA gets a JWT, the Axum API validates it against this pool's JWKS.
     // ---------------------------------------------------------------------
@@ -159,6 +171,7 @@ export class ManifestStack extends cdk.Stack {
       environment: {
         RESOURCE_EXPLORER_VIEW_ARN: viewArn,
         CACHE_TABLE: cache.tableName,
+        STATE_TABLE: stateTable.tableName,
         CACHE_TTL_SECONDS: String(cfg.cacheTtlSeconds),
         INDEXED_REGIONS: cfg.indexedRegions.join(','),
         MEMBER_INVENTORY_ROLE: cfg.memberInventoryRole,
@@ -233,6 +246,21 @@ export class ManifestStack extends cdk.Stack {
         sid: 'Cache',
         actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
         resources: [cache.tableArn],
+      }),
+    );
+    // Durable operator state (overrides + deletion marks). Scan is fine — the table
+    // only holds resources the operator has actually touched.
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'State',
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:DeleteItem',
+          'dynamodb:Scan',
+        ],
+        resources: [stateTable.tableArn],
       }),
     );
 
