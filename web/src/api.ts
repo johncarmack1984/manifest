@@ -86,11 +86,25 @@ export const getCost = (token: string | undefined) => get<CostData>("/api/cost",
 export const getInventory = (token: string | undefined, refresh = false) =>
   get<InventoryData>(`/api/inventory${refresh ? "?refresh=1" : ""}`, token);
 
+async function sha256Hex(s: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function post<T>(path: string, token: string | undefined, body: unknown): Promise<T> {
+  const payload = JSON.stringify(body);
   const r = await fetch(path, {
     method: "POST",
-    headers: { ...authHeaders(token), "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    headers: {
+      ...authHeaders(token),
+      "Content-Type": "application/json",
+      // CloudFront's OAC signs requests to the Lambda function URL but does NOT hash
+      // POST bodies, so the function URL (AWS_IAM auth) rejects them 403 unless the
+      // client supplies the body's SHA-256 for the SigV4 signature. Required by AWS —
+      // see CloudFront's "Restrict access to a Lambda function URL origin" docs.
+      "x-amz-content-sha256": await sha256Hex(payload),
+    },
+    body: payload,
   });
   if (r.status === 401) throw new Error("unauthorized");
   if (!r.ok) throw new Error(`${path} returned ${r.status}`);
