@@ -42,6 +42,15 @@ export interface ResourceRow {
   app: string | null;
   protected: boolean;
   reason: string;
+  /** Owning AWS account id, and its org name (or "this account" for the local one). */
+  account?: string;
+  accountName?: string;
+}
+/** An org member account the API tried but couldn't inventory (no role / no RE). */
+export interface NotIndexed {
+  account: string;
+  accountName: string;
+  reason: string;
 }
 export interface InventoryData {
   count: number;
@@ -49,7 +58,8 @@ export interface InventoryData {
   byRegion: Record<string, number>;
   byApp: Record<string, number>;
   byCategory: Record<string, number>;
-  flags: { orphans: number; unclaimed: number };
+  byAccount?: Record<string, number>;
+  flags: { orphans: number; unclaimed: number; notIndexed?: NotIndexed[] };
   indexedRegions: string[];
   generatedAt: string;
 }

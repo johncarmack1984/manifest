@@ -32,6 +32,9 @@ pub struct Inner {
     pub ddb: aws_sdk_dynamodb::Client,
     pub org: aws_sdk_organizations::Client,
     pub acm: aws_sdk_acm::Client,
+    /// Base config (this account's creds + region) — used to build assume-role
+    /// providers for cross-account inventory of org member accounts.
+    pub shared: aws_config::SdkConfig,
     pub cfg: Config,
     pub jwks: auth::JwksCache,
 }
@@ -41,6 +44,9 @@ pub struct Config {
     pub cache_ttl: i64,
     pub view_arn: String,
     pub indexed_regions: Vec<String>,
+    /// IAM role name assumed in each org member account to inventory it. Empty
+    /// disables cross-account inventory (this account only).
+    pub member_role: String,
     pub app_url: String,
     pub account_id: String,
     pub cognito_region: String,
@@ -62,6 +68,7 @@ impl Config {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string())
                 .collect(),
+            member_role: var("MEMBER_INVENTORY_ROLE"),
             app_url: var("APP_URL"),
             account_id: var("ACCOUNT_ID"),
             cognito_region: var("COGNITO_REGION"),
@@ -99,6 +106,7 @@ async fn main() -> Result<(), Error> {
         acm: aws_sdk_acm::Client::new(&shared),
         jwks: auth::JwksCache::default(),
         cfg: Config::from_env(),
+        shared,
     }));
 
     let app = Router::new()
