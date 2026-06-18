@@ -268,6 +268,23 @@ async fn compute(s: &AppState) -> Res<Value> {
         }
     }
 
+    // 3. Apply durable operator state: a manual classification override wins over inference.
+    let overrides = crate::state::load(s).await;
+    if !overrides.is_empty() {
+        for r in &mut resources {
+            let arn = r["arn"].as_str().unwrap_or_default().to_string();
+            let Some(app) = overrides.get(&arn).and_then(|st| st.app.as_ref()) else {
+                continue;
+            };
+            let proj = registry.projects.iter().find(|p| &p.repo == app);
+            r["app"] = json!(app);
+            r["category"] = json!(if proj.is_some_and(|p| p.dead) { "orphan" } else { "app" });
+            r["protected"] = json!(proj.is_some_and(|p| p.protected));
+            r["reason"] = json!(format!("manually assigned to '{app}'"));
+            r["override"] = json!(true);
+        }
+    }
+
     let mut by_region: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_app: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_category: BTreeMap<String, usize> = BTreeMap::new();
@@ -302,4 +319,35 @@ async fn compute(s: &AppState) -> Res<Value> {
         "indexedRegions": s.0.cfg.indexed_regions,
         "generatedAt": chrono::Utc::now().to_rfc3339(),
     }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ReclassifyReq {
+    /// Resources to (re)attribute, by ARN.
+    pub arns: Vec<String>,
+    /// Target app. Null or empty clears the override (back to inferred classification).
+    #[serde(default)]
+    pub app: Option<String>,
+}
+
+/// Manually (re)classify resources into an app — fixes misattributed or unclaimed
+/// resources, and is the tool that drives "unclaimed" toward zero. Writes a per-ARN
+/// override to the state table; the next inventory load reflects it. Auth required
+/// (the pool has a single user, so any authenticated caller is the owner).
+pub async fn reclassify(
+    State(s): State<AppState>,
+    _u: AuthUser,
+    Json(req): Json<ReclassifyReq>,
+) -> Result<Json<Value>, StatusCode> {
+    if s.0.cfg.state_table.is_empty() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let app = req.app.as_deref().map(str::trim).filter(|a| !a.is_empty());
+    for arn in &req.arns {
+        if let Err(e) = crate::state::set_override(&s, arn, app).await {
+            tracing::error!("reclassify {arn} failed: {e}");
+            return Err(StatusCode::BAD_GATEWAY);
+        }
+    }
+    Ok(Json(json!({ "ok": true, "count": req.arns.len(), "app": app })))
 }
