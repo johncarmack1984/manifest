@@ -7,6 +7,7 @@ import { loadConfig, PRIMARY_REGION } from '../lib/config';
 import { ManifestStack } from '../lib/manifest-stack';
 import { RegionIndexStack } from '../lib/region-index-stack';
 import { ManifestMemberStack } from '../lib/member-stack';
+import { ManifestCiStack } from '../lib/ci-stack';
 
 // Load infra/.env (gitignored) before reading config, regardless of cwd.
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -53,6 +54,20 @@ if (process.env.MANIFEST_MEMBER_DEPLOY === '1') {
     env: { account, region: process.env.MANIFEST_MEMBER_REGION || PRIMARY_REGION },
     roleName: cfg.memberInventoryRole,
     payerAccountId: cfg.payerAccountId,
+  });
+}
+
+// The GitHub Actions CI deploy role (OIDC). Synthesized ONLY when explicitly targeting
+// it (`just ci-role`), so `cdk deploy --all` never touches it. Deploy once with admin
+// credentials; set the printed ARN as the repo variable AWS_DEPLOY_ROLE_ARN.
+if (process.env.MANIFEST_CI_DEPLOY === '1') {
+  if (!cfg.githubRepo) throw new Error('MANIFEST_GITHUB_REPO ("owner/repo") is required to deploy the CI role');
+  new ManifestCiStack(app, `${stackId(cfg.name)}Ci`, {
+    env: { account, region: PRIMARY_REGION },
+    name: cfg.name,
+    githubRepo: cfg.githubRepo,
+    githubOidcArn: cfg.githubOidcArn,
+    cdkQualifier: cfg.cdkQualifier,
   });
 }
 

@@ -40,6 +40,14 @@ export interface ManifestConfig {
   /** Management/payer account id that member accounts trust (so the Lambda there
    *  can assume the inventory role). Only needed to deploy the member-account stack. */
   payerAccountId: string;
+  /** GitHub repo ("owner/repo") allowed to assume the CI deploy role. Only used by
+   *  `just ci-role` (the continuous-deployment setup). */
+  githubRepo: string;
+  /** ARN of an existing GitHub OIDC provider to reuse (one per account); empty to
+   *  create one. Only used by `just ci-role`. */
+  githubOidcArn: string;
+  /** CDK bootstrap qualifier whose roles the CI deploy role may assume (default hnb659fds). */
+  cdkQualifier: string;
 }
 
 export function loadConfig(): ManifestConfig {
@@ -61,6 +69,9 @@ export function loadConfig(): ManifestConfig {
     memberInventoryRole:
       e.MANIFEST_MEMBER_ROLE === undefined ? 'ManifestInventoryRole' : e.MANIFEST_MEMBER_ROLE,
     payerAccountId: e.MANIFEST_PAYER_ACCOUNT || '',
+    githubRepo: e.MANIFEST_GITHUB_REPO || '',
+    githubOidcArn: e.MANIFEST_GITHUB_OIDC_ARN || '',
+    cdkQualifier: e.MANIFEST_CDK_QUALIFIER || 'hnb659fds',
   };
 
   const required: Record<string, string> = {

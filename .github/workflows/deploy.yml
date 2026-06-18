@@ -1,0 +1,63 @@
+name: deploy
+
+# Continuous deployment: every push to main (i.e. a merged PR) builds the Lambda +
+# SPA and runs `cdk deploy`. Auth is GitHub OIDC — no long-lived AWS keys. The job
+# self-skips until you've wired up the deploy role + config, so a fresh fork's main
+# stays green. See README → "Continuous deployment".
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # mint the OIDC token assumed by AWS
+  contents: read
+
+# Never run two deploys at once; let an in-flight cdk deploy finish.
+concurrency:
+  group: manifest-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only when the deploy role is configured (skipped, not failed, otherwise).
+    if: ${{ vars.AWS_DEPLOY_ROLE_ARN != '' }}
+    runs-on: ubuntu-latest
+    env:
+      MANIFEST_DOMAIN_NAME: ${{ vars.MANIFEST_DOMAIN_NAME }}
+      MANIFEST_HOSTED_ZONE_ID: ${{ vars.MANIFEST_HOSTED_ZONE_ID }}
+      MANIFEST_HOSTED_ZONE_NAME: ${{ vars.MANIFEST_HOSTED_ZONE_NAME }}
+      MANIFEST_COGNITO_DOMAIN_PREFIX: ${{ vars.MANIFEST_COGNITO_DOMAIN_PREFIX }}
+      MANIFEST_OWNER_EMAIL: ${{ vars.MANIFEST_OWNER_EMAIL }}
+      MANIFEST_INDEXED_REGIONS: ${{ vars.MANIFEST_INDEXED_REGIONS }}
+      MANIFEST_SAML_METADATA_URL: ${{ vars.MANIFEST_SAML_METADATA_URL }}
+      MANIFEST_CREATE_AGGREGATOR: ${{ vars.MANIFEST_CREATE_AGGREGATOR }}
+      MANIFEST_MEMBER_ROLE: ${{ vars.MANIFEST_MEMBER_ROLE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: mlugg/setup-zig@v2 # zig is cargo-lambda's cross-compiler
+      - run: pip3 install cargo-lambda
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+      - name: Build Lambda (arm64)
+        run: cd api && cargo lambda build --release --arm64 --bin manifest-api
+      - name: Build SPA
+        run: cd web && pnpm build
+      - name: Deploy
+        run: cd infra && pnpm exec cdk deploy --all --require-approval never
