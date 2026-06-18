@@ -161,6 +161,7 @@ export class ManifestStack extends cdk.Stack {
         CACHE_TABLE: cache.tableName,
         CACHE_TTL_SECONDS: String(cfg.cacheTtlSeconds),
         INDEXED_REGIONS: cfg.indexedRegions.join(','),
+        MEMBER_INVENTORY_ROLE: cfg.memberInventoryRole,
         APP_URL: `https://${cfg.domainName}`,
         ACCOUNT_ID: this.account,
         COGNITO_REGION: PRIMARY_REGION,
@@ -215,6 +216,18 @@ export class ManifestStack extends cdk.Stack {
         resources: ['*'],
       }),
     );
+    // Cross-account inventory: assume the read role in each org member account.
+    // Scoped to the role NAME only (the member stack creates it); harmless until
+    // that role exists, so members just show as "not indexed" until deployed.
+    if (cfg.memberInventoryRole) {
+      fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          sid: 'AssumeMemberInventoryRole',
+          actions: ['sts:AssumeRole'],
+          resources: [`arn:aws:iam::*:role/${cfg.memberInventoryRole}`],
+        }),
+      );
+    }
     fn.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'Cache',

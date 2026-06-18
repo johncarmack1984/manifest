@@ -65,6 +65,7 @@ const AWS_MANAGED_TYPES: &[&str] = &[
     "memorydb:subnetgroup",
     "elasticache:user",
     "events:event-bus",
+    "iam:mfa",
     "xray:sampling-rule",
     "backup:backup-plan",
     "backup:backup-vault",
@@ -95,6 +96,10 @@ pub fn classify(
     // 1. AWS-managed defaults / plumbing.
     if AWS_MANAGED_TYPES.contains(&rtype)
         || lname.starts_with("default")
+        // IAM service-linked roles (AWSServiceRoleFor…) and Identity Center / SSO
+        // roles (AWSReservedSSO_…) are AWS-owned plumbing, surfaced once we scan global.
+        || lname.starts_with("awsservicerolefor")
+        || lname.starts_with("awsreservedsso_")
         || name == "AwsDataCatalog"
         || (service == "apprunner" && !name.is_empty() && name.chars().all(|c| c == '0' || c == '1'))
     {

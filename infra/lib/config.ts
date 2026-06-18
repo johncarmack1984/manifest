@@ -33,6 +33,13 @@ export interface ManifestConfig {
    *  indexes). Set false to reuse an aggregator the account already has — only one
    *  is allowed per account/region. The manifest-owned view is created either way. */
   createAggregator: boolean;
+  /** IAM role name the Lambda assumes in each org member account to inventory it
+   *  (deploy it there with `just member-deploy`). Inventory is per-account even
+   *  though cost is org-wide. Empty string disables cross-account inventory. */
+  memberInventoryRole: string;
+  /** Management/payer account id that member accounts trust (so the Lambda there
+   *  can assume the inventory role). Only needed to deploy the member-account stack. */
+  payerAccountId: string;
 }
 
 export function loadConfig(): ManifestConfig {
@@ -51,6 +58,9 @@ export function loadConfig(): ManifestConfig {
     ownerEmail: e.MANIFEST_OWNER_EMAIL || '',
     samlMetadataUrl: e.MANIFEST_SAML_METADATA_URL || '',
     createAggregator: e.MANIFEST_CREATE_AGGREGATOR !== 'false',
+    memberInventoryRole:
+      e.MANIFEST_MEMBER_ROLE === undefined ? 'ManifestInventoryRole' : e.MANIFEST_MEMBER_ROLE,
+    payerAccountId: e.MANIFEST_PAYER_ACCOUNT || '',
   };
 
   const required: Record<string, string> = {

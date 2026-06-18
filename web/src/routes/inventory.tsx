@@ -19,6 +19,7 @@ export default function Inventory() {
   const { data, loading, error } = useAsync(() => getInventory(token), [token]);
   const [q, setQ] = useState("");
   const [region, setRegion] = useState("all");
+  const [account, setAccount] = useState("all");
   const [hideNoise, setHideNoise] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
 
@@ -26,10 +27,13 @@ export default function Inventory() {
   if (error || !data) return <div className="text-sm text-red-400">Error: {error}</div>;
 
   const isNoise = (c: string) => c === "aws-managed" || c === "tooling";
+  const accounts = data.byAccount ? Object.keys(data.byAccount).sort() : [];
+  const multiAccount = accounts.length > 1;
   const filtered = data.resources.filter(
     (r) =>
       (!hideNoise || !isNoise(r.category)) &&
       (region === "all" || r.region === region) &&
+      (account === "all" || r.accountName === account || r.account === account) &&
       (q === "" || `${r.arn} ${r.type} ${r.name}`.toLowerCase().includes(q.toLowerCase())),
   );
 
@@ -86,6 +90,20 @@ export default function Inventory() {
             </option>
           ))}
         </select>
+        {multiAccount && (
+          <select
+            value={account}
+            onChange={(e) => setAccount(e.target.value)}
+            className="rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-1.5 text-sm outline-none"
+          >
+            <option value="all">all accounts</option>
+            {accounts.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        )}
         <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-neutral-400">
           <input
             type="checkbox"
@@ -102,6 +120,17 @@ export default function Inventory() {
           {allOpen ? "Collapse all" : "Expand all"}
         </button>
       </div>
+
+      {data.flags.notIndexed && data.flags.notIndexed.length > 0 && (
+        <div className="rounded-lg border border-amber-900/50 bg-amber-950/20 px-4 py-2.5 text-sm text-amber-300/90">
+          {data.flags.notIndexed.length} member account
+          {data.flags.notIndexed.length > 1 ? "s" : ""} not inventoried —{" "}
+          {data.flags.notIndexed.map((n) => n.accountName || n.account).join(", ")}.{" "}
+          <span className="text-amber-300/60">
+            deploy the inventory role there (just member-deploy) or enable Resource Explorer.
+          </span>
+        </div>
+      )}
 
       <div className="space-y-2">
         {sorted.map(([key, items]) => {
@@ -133,7 +162,12 @@ export default function Inventory() {
                           <td className="truncate px-4 py-1.5 text-neutral-300" title={r.arn}>
                             {r.name}
                           </td>
-                          <td className="truncate px-4 py-1.5 text-neutral-500">{r.region}</td>
+                          <td className="truncate px-4 py-1.5 text-neutral-500">
+                            {r.region}
+                            {multiAccount && r.accountName && (
+                              <span className="ml-1.5 text-neutral-600">· {r.accountName}</span>
+                            )}
+                          </td>
                           <td className="truncate px-4 py-1.5 text-neutral-500" title={r.reason}>
                             {r.type}
                           </td>

@@ -11,8 +11,7 @@ Deploy it into any AWS account with `just deploy`. Effectively free to run (see
 - **Cost** — spend by **account/app** (org-wide via consolidated billing), service,
   region, and day; month-over-month plus a forecast (Cost Explorer, cached in
   DynamoDB ~1h since CE charges $0.01/call).
-- **Inventory** — every resource in every indexed region in one filterable list
-  (Resource Explorer).
+- **Inventory** — every resource in every indexed region (plus global services: CloudFront, Route53, IAM) in one filterable list (Resource Explorer). Spans **org member accounts** too: cost is org-wide via consolidated billing, but inventory is per-account, so the Lambda assumes a read-only role in each member account (deploy it with `just member-deploy` — see [Cross-account inventory](#cross-account-inventory)).
 - **Cruft flags** — untagged resources, resources in regions with no recent
   deploys, and **spend in a region with no inventory coverage** (the blind-spot
   detector).
@@ -84,6 +83,15 @@ Set `MANIFEST_INDEXED_REGIONS=us-east-1,us-west-2,eu-west-1` in `infra/.env`.
 Each extra region gets its own tiny `RegionIndexStack`. Cost views always cover
 *all* regions regardless; spend in a region you haven't indexed is flagged as a
 blind spot.
+
+## Cross-account inventory
+Cost is org-wide automatically (consolidated billing covers every linked account), but **inventory is per-account** — Resource Explorer only sees the account it's queried in. So to inventory other org accounts, manifest assumes a read-only role in each one. The Lambda enumerates the org's accounts (`organizations:ListAccounts`) and, for each, assumes `MANIFEST_MEMBER_ROLE` (default `ManifestInventoryRole`) to sweep that account's regions; resources are tagged with their owning account and filterable in the UI.
+
+Deploy the role into each member account (once per account, with that account's credentials):
+```sh
+AWS_PROFILE=<member-profile> MANIFEST_PAYER_ACCOUNT=<payer-account-id> just member-deploy
+```
+The role grants only read-only Resource Explorer + `acm:DescribeCertificate`, and trusts the payer account (the actual caller is gated by the Lambda's narrow `sts:AssumeRole` grant). Each member account must have **Resource Explorer enabled** (an index + default view) in the regions you want covered. Accounts that can't be reached (role not yet deployed, or no Resource Explorer) show as a "not inventoried" banner rather than silently vanishing. Set `MANIFEST_MEMBER_ROLE=""` to disable and inventory only the dashboard's own account.
 
 ## Cost
 Effectively free: Lambda + DynamoDB on-demand + Resource Explorer (free) +

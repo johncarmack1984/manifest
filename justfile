@@ -32,6 +32,14 @@ up:
 synth:
     cd infra && pnpm exec cdk synth
 
+# Deploy the cross-account inventory role INTO an org member account so the dashboard
+# can inventory it (cost is already org-wide; inventory is per-account). Run once per
+# member account with that account's credentials:
+#   AWS_PROFILE=<member> MANIFEST_PAYER_ACCOUNT=<payer-account-id> just member-deploy
+# The member account must have Resource Explorer enabled (an index + default view).
+member-deploy:
+    cd infra && MANIFEST_MEMBER_DEPLOY=1 pnpm exec cdk deploy '*Member' --require-approval never
+
 # Full build + deploy.
 deploy: install api web up
 
