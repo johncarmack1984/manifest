@@ -34,10 +34,10 @@ jobs:
       MANIFEST_CREATE_AGGREGATOR: ${{ vars.MANIFEST_CREATE_AGGREGATOR }}
       MANIFEST_MEMBER_ROLE: ${{ vars.MANIFEST_MEMBER_ROLE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure AWS credentials (GitHub OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
@@ -48,10 +48,10 @@ jobs:
       - uses: mlugg/setup-zig@v2 # zig is cargo-lambda's cross-compiler
       - run: pip3 install cargo-lambda
 
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 'lts/*'
           cache: pnpm
 
       - run: pnpm install
