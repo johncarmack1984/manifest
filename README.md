@@ -1,6 +1,6 @@
 # manifest
 
-A self-hosted **AWS cost + inventory dashboard**. Cost Explorer shows *spend by
+A self-hosted AWS cost + inventory dashboard. Cost Explorer shows *spend by
 service* but never *which resource is the spend* or *what's just sitting there
 idle*; manifest does, turning a two-day cleanup into a twenty-minute one.
 
@@ -8,12 +8,12 @@ Deploy it into any AWS account with `just deploy`. Effectively free to run (see
 [Cost](#cost)).
 
 ## What it shows
-- **Cost**: spend by **account/app** (org-wide via consolidated billing), service,
+- **Cost**: spend by account/app (org-wide via consolidated billing), service,
   region, and day; month-over-month plus a forecast (Cost Explorer, cached in
   DynamoDB ~1h since CE charges $0.01/call).
-- **Inventory**: every resource in every indexed region (plus global services: CloudFront, Route53, IAM) in one filterable list (Resource Explorer). Spans **org member accounts** too: cost is org-wide via consolidated billing, but inventory is per-account, so the Lambda assumes a read-only role in each member account (deploy it with `just member-deploy`; see [Cross-account inventory](#cross-account-inventory)).
+- **Inventory**: every resource in every indexed region (plus global services: CloudFront, Route53, IAM) in one filterable list (Resource Explorer). Spans org member accounts too: cost is org-wide via consolidated billing, but inventory is per-account, so the Lambda assumes a read-only role in each member account (deploy it with `just member-deploy`; see [Cross-account inventory](#cross-account-inventory)).
 - **Cruft flags**: untagged resources, resources in regions with no recent
-  deploys, and **spend in a region with no inventory coverage** (the blind-spot
+  deploys, and spend in a region with no inventory coverage (the blind-spot
   detector).
 
 ## Architecture
@@ -23,8 +23,8 @@ Deploy it into any AWS account with `just deploy`. Effectively free to run (see
 Cognito Hosted UI → JWT → Axum validates each request
 Axum → Cost Explorer + Resource Explorer + DynamoDB cache
 ```
-Infra is **AWS CDK (TypeScript)**; the API is **Rust / Axum** on Lambda; the UI
-is **Vite + React + TypeScript**. The SPA fetches all its config from
+Infra is AWS CDK (TypeScript); the API is Rust / Axum on Lambda; the UI
+is Vite + React + TypeScript. The SPA fetches all its config from
 `/api/config` at runtime, so nothing account-specific is baked into the build.
 
 ## Layout
@@ -36,8 +36,8 @@ is **Vite + React + TypeScript**. The SPA fetches all its config from
 
 ## Prerequisites
 - An AWS account + credentials (`aws sso login` / `AWS_PROFILE=…`), admin-ish for the first deploy.
-- To see **org-wide per-account** spend, deploy into your organization's management (payer) account, or a delegated Cost Explorer admin account; from a standalone account it shows only that account.
-- A **Route53 hosted zone** you control (for the dashboard's domain + TLS cert).
+- To see org-wide per-account spend, deploy into your organization's management (payer) account, or a delegated Cost Explorer admin account; from a standalone account it shows only that account.
+- A Route53 hosted zone you control (for the dashboard's domain + TLS cert).
 - [Rust](https://rustup.rs), [cargo-lambda](https://www.cargo-lambda.info), and [Zig](https://ziglang.org) (to cross-compile the arm64 Lambda).
 - Node 20+, [pnpm](https://pnpm.io), and [just](https://github.com/casey/just).
 - CDK bootstrapped once per account/region: `pnpm --dir infra exec cdk bootstrap`.
@@ -61,7 +61,7 @@ Individual steps: `just api`, `just web`, `just up`, `just synth`, `just destroy
 ## Continuous deployment
 Once set up, every push to `main` (a merged PR) deploys itself via GitHub Actions
 ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)): no local `just deploy`.
-Auth is **GitHub OIDC**, so the repo stores no long-lived AWS keys.
+Auth is GitHub OIDC, so the repo stores no long-lived AWS keys.
 
 One-time setup:
 1. Configure `infra/.env` and `cdk bootstrap`, as for a manual deploy.
@@ -84,7 +84,7 @@ can only assume the account's CDK bootstrap roles (to run `cdk deploy`) and noth
 Out of the box, sign-in uses a Cognito Hosted UI with one admin-created user
 (`MANIFEST_OWNER_EMAIL`); Cognito emails a temporary password on first deploy.
 
-To sign in with **AWS IAM Identity Center** (your AWS SSO) instead, no separate
+To sign in with AWS IAM Identity Center (your AWS SSO) instead, no separate
 password, federate Cognito to Identity Center via SAML:
 
 1. Deploy once *without* `MANIFEST_SAML_METADATA_URL`. Note the stack outputs
@@ -123,13 +123,13 @@ assigned. Run `just registry-pull` to sync those live edits back to `projects.to
 git (the inverse of `registry-push`).
 
 ## Cross-account inventory
-Cost is org-wide automatically (consolidated billing covers every linked account), but **inventory is per-account**: Resource Explorer only sees the account it's queried in. So to inventory other org accounts, manifest assumes a read-only role in each one. The Lambda enumerates the org's accounts (`organizations:ListAccounts`) and, for each, assumes `MANIFEST_MEMBER_ROLE` (default `ManifestInventoryRole`) to sweep that account's regions; resources are tagged with their owning account and filterable in the UI.
+Cost is org-wide automatically (consolidated billing covers every linked account), but inventory is per-account: Resource Explorer only sees the account it's queried in. So to inventory other org accounts, manifest assumes a read-only role in each one. The Lambda enumerates the org's accounts (`organizations:ListAccounts`) and, for each, assumes `MANIFEST_MEMBER_ROLE` (default `ManifestInventoryRole`) to sweep that account's regions; resources are tagged with their owning account and filterable in the UI.
 
 Deploy the role into each member account (once per account, with that account's credentials):
 ```sh
 AWS_PROFILE=<member-profile> MANIFEST_PAYER_ACCOUNT=<payer-account-id> just member-deploy
 ```
-The role grants only read-only Resource Explorer + `acm:DescribeCertificate`, and trusts the payer account (the actual caller is gated by the Lambda's narrow `sts:AssumeRole` grant). Each member account must have **Resource Explorer enabled** (an index + default view) in the regions you want covered. Accounts that can't be reached (role not yet deployed, or no Resource Explorer) show as a "not inventoried" banner rather than silently vanishing. Set `MANIFEST_MEMBER_ROLE=""` to disable and inventory only the dashboard's own account.
+The role grants only read-only Resource Explorer + `acm:DescribeCertificate`, and trusts the payer account (the actual caller is gated by the Lambda's narrow `sts:AssumeRole` grant). Each member account must have Resource Explorer enabled (an index + default view) in the regions you want covered. Accounts that can't be reached (role not yet deployed, or no Resource Explorer) show as a "not inventoried" banner rather than silently vanishing. Set `MANIFEST_MEMBER_ROLE=""` to disable and inventory only the dashboard's own account.
 
 ## Reaping marked resources
 **Mark for deletion** in the Inventory view only records intent in DynamoDB. It deletes
