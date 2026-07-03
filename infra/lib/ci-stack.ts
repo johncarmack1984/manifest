@@ -39,9 +39,11 @@ export class ManifestCiStack extends cdk.Stack {
       description: 'GitHub Actions OIDC deploy role for the manifest dashboard.',
       maxSessionDuration: cdk.Duration.hours(1),
       assumedBy: new iam.OpenIdConnectPrincipal(provider, {
-        StringEquals: { [`${GH}:aud`]: 'sts.amazonaws.com' },
-        // Only this repo's workflows (any branch/tag/PR) may assume the role.
-        StringLike: { [`${GH}:sub`]: `repo:${githubRepo}:*` },
+        StringEquals: {
+          [`${GH}:aud`]: 'sts.amazonaws.com',
+          // Only this repo's workflows on the main branch may assume the role.
+          [`${GH}:sub`]: `repo:${githubRepo}:ref:refs/heads/main`,
+        },
       }),
     });
 
