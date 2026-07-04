@@ -357,35 +357,29 @@ export default function Inventory() {
     localStorage.setItem(SIZE_KEY, JSON.stringify(columnSizing));
   }, [columnSizing]);
 
-  // Lazily-resolved creation dates: only queried while the created column is
-  // shown, only for rows in open groups, and never re-queried once resolved
-  // (the server caches them durably too).
+  // Creation dates: nothing is queried while the column is hidden; once it's
+  // shown, bulk-prefetch the WHOLE inventory, one 400-ARN chunk per pass (each
+  // resolution re-runs the effect via `created` until nothing is missing).
+  // Chunks are sequential on purpose — every request merges into the server's
+  // durable cache item, so parallel chunks would clobber each other's writes.
   const [created, setCreated] = useState<Record<string, string | null>>({});
   const [pending, setPending] = useState<Set<string>>(new Set());
   const createdOn = columnVisibility.created === true;
   useEffect(() => {
     if (!createdOn || !data) return;
-    const want = [
-      ...new Set(
-        data.resources
-          .filter((r) => open.has(r.app ?? r.category))
-          .map((r) => r.arn)
-          .filter((a) => !(a in created) && !pending.has(a)),
-      ),
-    ].slice(0, 300);
-    if (want.length === 0) return;
-    setPending((p) => new Set([...p, ...want]));
-    getCreated(token, want)
-      .then((res) => setCreated((c) => ({ ...c, ...res.created })))
+    const missing = data.resources.map((r) => r.arn).filter((a) => !(a in created));
+    const chunk = [...new Set(missing)].slice(0, 400);
+    if (chunk.length === 0) return;
+    let live = true;
+    setPending(new Set(chunk));
+    getCreated(token, chunk)
+      .then((res) => live && setCreated((c) => ({ ...c, ...res.created })))
       .catch(() => {})
-      .finally(() =>
-        setPending((p) => {
-          const n = new Set(p);
-          for (const a of want) n.delete(a);
-          return n;
-        }),
-      );
-  }, [createdOn, data, open, created, pending, token]);
+      .finally(() => live && setPending(new Set()));
+    return () => {
+      live = false;
+    };
+  }, [createdOn, data, created, token]);
 
   // Initial load, then a background revalidate on each token renewal — the page
   // keeps showing the last data instead of blanking to the spinner. Mutations

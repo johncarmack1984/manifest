@@ -861,116 +861,169 @@ async fn created_for(
                 })
                 .collect()
         }
+        // The remaining services only expose per-resource describes; run them with
+        // bounded concurrency so a bulk prefetch of the whole inventory resolves in
+        // seconds rather than crawling one call at a time.
         "iam" => {
             let iam = aws_sdk_iam::Client::new(&s.0.shared);
-            let mut out = Vec::new();
-            for (arn, rest) in items {
-                let name = tail(&rest);
-                let v = if rest.starts_with("role/") {
-                    iam.get_role().role_name(&name).send().await.ok().and_then(|o| {
-                        o.role().and_then(|r| dt(Some(r.create_date())))
-                    })
-                } else if rest.starts_with("user/") {
-                    iam.get_user().user_name(&name).send().await.ok().and_then(|o| {
-                        o.user().and_then(|u| dt(Some(u.create_date())))
-                    })
-                } else {
-                    None
-                };
-                out.push((arn, v));
-            }
-            out
+            each(items, move |arn, rest| {
+                let iam = iam.clone();
+                async move {
+                    let name = rest.rsplit('/').next().unwrap_or_default().to_string();
+                    let v = if rest.starts_with("role/") {
+                        iam.get_role().role_name(&name).send().await.ok().and_then(|o| {
+                            o.role().and_then(|r| dt(Some(r.create_date())))
+                        })
+                    } else if rest.starts_with("user/") {
+                        iam.get_user().user_name(&name).send().await.ok().and_then(|o| {
+                            o.user().and_then(|u| dt(Some(u.create_date())))
+                        })
+                    } else {
+                        None
+                    };
+                    (arn, v)
+                }
+            })
+            .await
         }
         "logs" => {
             let logs = aws_sdk_cloudwatchlogs::Client::from_conf(
                 aws_sdk_cloudwatchlogs::config::Builder::from(&s.0.shared).region(rg()).build(),
             );
-            let mut out = Vec::new();
-            for (arn, rest) in items {
-                let name =
-                    rest.strip_prefix("log-group:").unwrap_or(&rest).trim_end_matches(":*").to_string();
-                let v = logs
-                    .describe_log_groups()
-                    .log_group_name_prefix(&name)
-                    .send()
-                    .await
-                    .ok()
-                    .and_then(|o| {
-                        o.log_groups()
-                            .iter()
-                            .find(|g| g.log_group_name() == Some(name.as_str()))
-                            .and_then(|g| g.creation_time())
-                    })
-                    .and_then(chrono::DateTime::from_timestamp_millis)
-                    .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string());
-                out.push((arn, v));
-            }
-            out
+            each(items, move |arn, rest| {
+                let logs = logs.clone();
+                async move {
+                    let name = rest
+                        .strip_prefix("log-group:")
+                        .unwrap_or(&rest)
+                        .trim_end_matches(":*")
+                        .to_string();
+                    let v = logs
+                        .describe_log_groups()
+                        .log_group_name_prefix(&name)
+                        .send()
+                        .await
+                        .ok()
+                        .and_then(|o| {
+                            o.log_groups()
+                                .iter()
+                                .find(|g| g.log_group_name() == Some(name.as_str()))
+                                .and_then(|g| g.creation_time())
+                        })
+                        .and_then(chrono::DateTime::from_timestamp_millis)
+                        .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+                    (arn, v)
+                }
+            })
+            .await
         }
         "dynamodb" => {
             let ddb = aws_sdk_dynamodb::Client::from_conf(
                 aws_sdk_dynamodb::config::Builder::from(&s.0.shared).region(rg()).build(),
             );
-            let mut out = Vec::new();
-            for (arn, rest) in items {
-                let v = ddb.describe_table().table_name(tail(&rest)).send().await.ok().and_then(|o| {
-                    o.table().and_then(|t| dt(t.creation_date_time()))
-                });
-                out.push((arn, v));
-            }
-            out
+            each(items, move |arn, rest| {
+                let ddb = ddb.clone();
+                async move {
+                    let name = rest.rsplit('/').next().unwrap_or_default().to_string();
+                    let v = ddb.describe_table().table_name(name).send().await.ok().and_then(|o| {
+                        o.table().and_then(|t| dt(t.creation_date_time()))
+                    });
+                    (arn, v)
+                }
+            })
+            .await
         }
         "acm" => {
             let acm = aws_sdk_acm::Client::from_conf(
                 aws_sdk_acm::config::Builder::from(&s.0.shared).region(rg()).build(),
             );
-            let mut out = Vec::new();
-            for (arn, _rest) in items {
-                let v = acm.describe_certificate().certificate_arn(&arn).send().await.ok().and_then(
-                    |o| o.certificate().and_then(|c| dt(c.created_at())),
-                );
-                out.push((arn, v));
-            }
-            out
+            each(items, move |arn, _rest| {
+                let acm = acm.clone();
+                async move {
+                    let v = acm
+                        .describe_certificate()
+                        .certificate_arn(&arn)
+                        .send()
+                        .await
+                        .ok()
+                        .and_then(|o| o.certificate().and_then(|c| dt(c.created_at())));
+                    (arn, v)
+                }
+            })
+            .await
         }
         "secretsmanager" => {
             let sm = aws_sdk_secretsmanager::Client::from_conf(
                 aws_sdk_secretsmanager::config::Builder::from(&s.0.shared).region(rg()).build(),
             );
-            let mut out = Vec::new();
-            for (arn, _rest) in items {
-                let v = sm.describe_secret().secret_id(&arn).send().await.ok().and_then(|o| dt(o.created_date()));
-                out.push((arn, v));
-            }
-            out
+            each(items, move |arn, _rest| {
+                let sm = sm.clone();
+                async move {
+                    let v = sm
+                        .describe_secret()
+                        .secret_id(&arn)
+                        .send()
+                        .await
+                        .ok()
+                        .and_then(|o| dt(o.created_date()));
+                    (arn, v)
+                }
+            })
+            .await
         }
         "ecr" => {
             let ecr = aws_sdk_ecr::Client::from_conf(
                 aws_sdk_ecr::config::Builder::from(&s.0.shared).region(rg()).build(),
             );
-            let mut out = Vec::new();
-            for (arn, rest) in items {
-                let name = rest.strip_prefix("repository/").unwrap_or(&rest).to_string();
-                let v = ecr.describe_repositories().repository_names(name).send().await.ok().and_then(
-                    |o| o.repositories().first().and_then(|r| dt(r.created_at())),
-                );
-                out.push((arn, v));
-            }
-            out
+            each(items, move |arn, rest| {
+                let ecr = ecr.clone();
+                async move {
+                    let name = rest.strip_prefix("repository/").unwrap_or(&rest).to_string();
+                    let v = ecr
+                        .describe_repositories()
+                        .repository_names(name)
+                        .send()
+                        .await
+                        .ok()
+                        .and_then(|o| o.repositories().first().and_then(|r| dt(r.created_at())));
+                    (arn, v)
+                }
+            })
+            .await
         }
         "cognito-idp" => {
             let cog = aws_sdk_cognitoidentityprovider::Client::from_conf(
                 aws_sdk_cognitoidentityprovider::config::Builder::from(&s.0.shared).region(rg()).build(),
             );
-            let mut out = Vec::new();
-            for (arn, rest) in items {
-                let v = cog.describe_user_pool().user_pool_id(tail(&rest)).send().await.ok().and_then(
-                    |o| o.user_pool().and_then(|p| dt(p.creation_date())),
-                );
-                out.push((arn, v));
-            }
-            out
+            each(items, move |arn, rest| {
+                let cog = cog.clone();
+                async move {
+                    let id = rest.rsplit('/').next().unwrap_or_default().to_string();
+                    let v = cog
+                        .describe_user_pool()
+                        .user_pool_id(id)
+                        .send()
+                        .await
+                        .ok()
+                        .and_then(|o| o.user_pool().and_then(|p| dt(p.creation_date())));
+                    (arn, v)
+                }
+            })
+            .await
         }
         _ => items.into_iter().map(|(arn, _)| (arn, None)).collect(),
     }
+}
+
+/// Run one describe per item with bounded concurrency.
+async fn each<F, Fut>(items: Vec<(String, String)>, f: F) -> Vec<(String, Option<String>)>
+where
+    F: Fn(String, String) -> Fut,
+    Fut: std::future::Future<Output = (String, Option<String>)>,
+{
+    use futures::StreamExt;
+    futures::stream::iter(items.into_iter().map(|(arn, rest)| f(arn, rest)))
+        .buffer_unordered(10)
+        .collect()
+        .await
 }

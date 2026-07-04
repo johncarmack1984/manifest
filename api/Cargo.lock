@@ -2110,6 +2110,7 @@ dependencies = [
  "axum",
  "chrono",
  "flate2",
+ "futures",
  "jsonwebtoken",
  "lambda_http",
  "reqwest",
