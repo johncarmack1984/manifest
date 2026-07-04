@@ -28,7 +28,7 @@ jobs:
         with:
           node-version: 'lts/*'
           cache: pnpm
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
       - run: cd web && pnpm build
 
   infra:
@@ -48,5 +48,5 @@ jobs:
         with:
           node-version: 'lts/*'
           cache: pnpm
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
       - run: cd infra && pnpm exec cdk synth

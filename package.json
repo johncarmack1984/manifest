@@ -4,7 +4,7 @@
   "private": true,
   "description": "Self-hosted AWS cost + inventory dashboard — CDK + Rust/Axum + React.",
   "license": "MIT",
-  "packageManager": "pnpm@9.15.4",
+  "packageManager": "pnpm@10.30.3",
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild", "@tailwindcss/oxide"]
   }
