@@ -58,6 +58,14 @@ const AWS_MANAGED_TYPES: &[&str] = &[
     "apigateway:apis/stages",
     "apigateway:apis/routes",
     "apigateway:apis/integrations",
+    // CloudFront attachments/config — owned by (and only meaningful through) their
+    // distribution, which classifies by its alias.
+    "cloudfront:origin-access-identity",
+    "cloudfront:origin-access-control",
+    "cloudfront:cache-policy",
+    "cloudfront:origin-request-policy",
+    "cloudfront:response-headers-policy",
+    "cloudfront:function",
     "lambda:layer/version",
     "lambda:function/version",
     "resource-explorer-2:index",
@@ -91,6 +99,7 @@ const TOOLING_MARKERS: &[&str] = &[
     "SSTConsole",
     "sst-asset",
     "aws-sam-cli",
+    "cargo-lambda-role",
 ];
 
 /// Display (and classification) name for a resource ARN. The generic tail-of-ARN is

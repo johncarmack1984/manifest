@@ -229,6 +229,37 @@ export class ManifestStack extends cdk.Stack {
         resources: ['*'],
       }),
     );
+    // Same idea for the other ID-named globals: CloudFront distributions show
+    // their alias, hosted zones their domain — so both classify by pattern.
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'GlobalNameRead',
+        actions: ['cloudfront:ListDistributions', 'route53:ListHostedZones'],
+        resources: ['*'],
+      }),
+    );
+    // Best-effort "created on" lookups for the inventory's created column —
+    // read-only describes across the types that expose a creation time.
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'CreatedOnRead',
+        actions: [
+          'ec2:DescribeVolumes',
+          'ec2:DescribeInstances',
+          'ec2:DescribeKeyPairs',
+          'ec2:DescribeLaunchTemplates',
+          's3:ListAllMyBuckets',
+          'iam:GetRole',
+          'iam:GetUser',
+          'logs:DescribeLogGroups',
+          'dynamodb:DescribeTable',
+          'secretsmanager:DescribeSecret',
+          'ecr:DescribeRepositories',
+          'cognito-idp:DescribeUserPool',
+        ],
+        resources: ['*'],
+      }),
+    );
     // Cross-account inventory: assume the read role in each org member account.
     // Scoped to the role NAME only (the member stack creates it); harmless until
     // that role exists, so members just show as "not indexed" until deployed.

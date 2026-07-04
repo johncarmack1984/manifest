@@ -21,13 +21,13 @@ pub async fn handler(
     Query(q): Query<Refresh>,
 ) -> Result<Json<Value>, StatusCode> {
     if !q.requested() {
-        if let Some(v) = crate::cache_get(&s, "inventory:v3").await {
+        if let Some(v) = crate::cache_get(&s, "inventory:v4").await {
             return Ok(Json(v));
         }
     }
     match compute(&s).await {
         Ok(v) => {
-            crate::cache_put(&s, "inventory:v3", &v).await;
+            crate::cache_put(&s, "inventory:v4", &v).await;
             Ok(Json(v))
         }
         Err(e) => {
@@ -427,6 +427,39 @@ fn attach_costs(resources: &mut [Value], costs: BTreeMap<String, f64>) {
     }
 }
 
+/// Display names for ID-named global resources: a CloudFront distribution shows its
+/// first alias, a hosted zone its domain — so both classify by the domain patterns.
+/// One List call each, local account only; empty on error (rows keep their ids).
+/// Same idea as the ACM domain lookup.
+async fn global_names(s: &AppState) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+
+    let cf = aws_sdk_cloudfront::Client::new(&s.0.shared);
+    match cf.list_distributions().send().await {
+        Ok(resp) => {
+            let items = resp.distribution_list().map(|l| l.items()).unwrap_or_default();
+            for d in items {
+                if let Some(alias) = d.aliases().map(|a| a.items()).and_then(|a| a.first()) {
+                    out.insert(d.id().to_string(), alias.clone());
+                }
+            }
+        }
+        Err(e) => tracing::warn!("cloudfront:ListDistributions unavailable: {e}"),
+    }
+
+    let r53 = aws_sdk_route53::Client::new(&s.0.shared);
+    match r53.list_hosted_zones().send().await {
+        Ok(resp) => {
+            for z in resp.hosted_zones() {
+                let id = z.id().rsplit('/').next().unwrap_or_default().to_string();
+                out.insert(id, z.name().trim_end_matches('.').to_string());
+            }
+        }
+        Err(e) => tracing::warn!("route53:ListHostedZones unavailable: {e}"),
+    }
+    out
+}
+
 async fn compute(s: &AppState) -> Res<Value> {
     let registry = Registry::from_dynamo(&s.0.ddb, &s.0.cfg.cache_table).await;
     let regions = scan_regions(&s.0.cfg.indexed_regions);
@@ -467,6 +500,32 @@ async fn compute(s: &AppState) -> Res<Value> {
                 }
             }
             Err(e) => tracing::info!("not enumerating member accounts ({e}); this account only"),
+        }
+    }
+
+    // 2.5 Give ID-named globals their real names (distribution alias, zone domain)
+    //     and re-classify with them. Local account only; overrides still win below.
+    let gnames = global_names(s).await;
+    if !gnames.is_empty() {
+        for r in &mut resources {
+            let rtype = r["type"].as_str().unwrap_or_default().to_string();
+            if rtype != "cloudfront:distribution" && rtype != "route53:hostedzone" {
+                continue;
+            }
+            if r["account"].as_str() != Some(s.0.cfg.account_id.as_str()) {
+                continue;
+            }
+            let Some(name) = gnames.get(r["name"].as_str().unwrap_or_default()).cloned() else {
+                continue;
+            };
+            let service = r["service"].as_str().unwrap_or_default().to_string();
+            let stack = r["stack"].as_str().map(str::to_string);
+            let c = classify(&name, &rtype, &service, stack.as_deref(), &registry);
+            r["name"] = json!(name);
+            r["category"] = json!(c.category.as_str());
+            r["app"] = json!(c.app);
+            r["protected"] = json!(c.protected);
+            r["reason"] = json!(c.reason);
         }
     }
 
@@ -608,4 +667,310 @@ pub async fn mark(
         }
     }
     Ok(Json(json!({ "ok": true, "count": req.arns.len(), "marked": req.marked })))
+}
+
+// ---- "created on": best-effort creation dates, resolved lazily and cached ----
+
+#[derive(serde::Deserialize)]
+pub struct CreatedReq {
+    /// Resources to resolve, by ARN.
+    pub arns: Vec<String>,
+}
+
+/// Durable cache item: creation dates never change, so resolved values (including
+/// "unavailable", stored as null) outlive the standard cache TTL by far.
+const CREATED_KEY: &str = "created:v1";
+const CREATED_TTL: i64 = 30 * 24 * 3600;
+
+/// Resolve creation dates for a batch of ARNs — the dashboard's lazily-loaded
+/// "created" column. Per-service describe calls for the types that expose one;
+/// anything else (unsupported type, another org account, a failed describe)
+/// resolves to null and is cached too, so nothing is re-queried on every view.
+pub async fn created(
+    State(s): State<AppState>,
+    _u: AuthUser,
+    Json(req): Json<CreatedReq>,
+) -> Result<Json<Value>, StatusCode> {
+    let mut arns = req.arns;
+    arns.truncate(400);
+
+    let mut map = crate::cache_get(&s, CREATED_KEY)
+        .await
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+
+    let missing: Vec<String> = arns.iter().filter(|a| !map.contains_key(*a)).cloned().collect();
+    if !missing.is_empty() {
+        for (arn, when) in resolve_created(&s, &missing).await {
+            map.insert(arn, when.map(Value::String).unwrap_or(Value::Null));
+        }
+        crate::cache_put_ttl(&s, CREATED_KEY, &Value::Object(map.clone()), CREATED_TTL).await;
+    }
+
+    let out: serde_json::Map<String, Value> =
+        arns.iter().map(|a| (a.clone(), map.get(a).cloned().unwrap_or(Value::Null))).collect();
+    Ok(Json(json!({ "created": out })))
+}
+
+/// (service, region, account, resource-part) of an ARN.
+fn arn_parts(arn: &str) -> Option<(String, String, String, String)> {
+    let mut it = arn.splitn(6, ':');
+    let (_, _) = (it.next()?, it.next()?);
+    Some((
+        it.next()?.to_string(),
+        it.next()?.to_string(),
+        it.next()?.to_string(),
+        it.next()?.to_string(),
+    ))
+}
+
+fn dt(t: Option<&aws_smithy_types::DateTime>) -> Option<String> {
+    t.and_then(|t| t.fmt(aws_smithy_types::date_time::Format::DateTime).ok())
+}
+
+async fn resolve_created(s: &AppState, arns: &[String]) -> Vec<(String, Option<String>)> {
+    use std::collections::HashMap;
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    let mut buckets: Vec<(String, String)> = Vec::new();
+    let mut grouped: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
+
+    for arn in arns {
+        let Some((service, region, account, rest)) = arn_parts(arn) else {
+            out.push((arn.clone(), None));
+            continue;
+        };
+        // S3 ARNs carry no region/account; everything else must be local — the
+        // member-account role only grants Resource Explorer reads.
+        if service == "s3" {
+            buckets.push((arn.clone(), rest));
+            continue;
+        }
+        if !account.is_empty() && account != s.0.cfg.account_id {
+            out.push((arn.clone(), None));
+            continue;
+        }
+        let region = if region.is_empty() { "us-east-1".into() } else { region };
+        grouped.entry((service, region)).or_default().push((arn.clone(), rest));
+    }
+
+    // One ListBuckets covers every bucket.
+    if !buckets.is_empty() {
+        let s3 = aws_sdk_s3::Client::new(&s.0.shared);
+        let mut by_name: HashMap<String, Option<String>> = HashMap::new();
+        match s3.list_buckets().send().await {
+            Ok(resp) => {
+                for b in resp.buckets() {
+                    if let Some(n) = b.name() {
+                        by_name.insert(n.to_string(), dt(b.creation_date()));
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("created: s3:ListBuckets failed: {e}"),
+        }
+        for (arn, name) in buckets {
+            let v = by_name.get(&name).cloned().flatten();
+            out.push((arn, v));
+        }
+    }
+
+    for ((service, region), items) in grouped {
+        out.extend(created_for(s, &service, &region, items).await);
+    }
+    out
+}
+
+/// Creation dates for one (service, region) batch; unsupported types → None.
+async fn created_for(
+    s: &AppState,
+    service: &str,
+    region: &str,
+    items: Vec<(String, String)>,
+) -> Vec<(String, Option<String>)> {
+    use std::collections::HashMap;
+    let tail = |rest: &str| rest.rsplit('/').next().unwrap_or_default().to_string();
+    let rg = || aws_config::Region::new(region.to_string());
+
+    match service {
+        "ec2" => {
+            let ec2 = aws_sdk_ec2::Client::from_conf(
+                aws_sdk_ec2::config::Builder::from(&s.0.shared).region(rg()).build(),
+            );
+            let mut found: HashMap<String, Option<String>> = HashMap::new();
+            let ids = |prefix: &str| -> Vec<String> {
+                items.iter().map(|(_, rest)| tail(rest)).filter(|t| t.starts_with(prefix)).collect()
+            };
+            let filter = |name: &str, values: Vec<String>| {
+                aws_sdk_ec2::types::Filter::builder().name(name).set_values(Some(values)).build()
+            };
+            let vols = ids("vol-");
+            if !vols.is_empty() {
+                if let Ok(resp) = ec2.describe_volumes().filters(filter("volume-id", vols)).send().await {
+                    for v in resp.volumes() {
+                        if let Some(id) = v.volume_id() {
+                            found.insert(id.into(), dt(v.create_time()));
+                        }
+                    }
+                }
+            }
+            let insts = ids("i-");
+            if !insts.is_empty() {
+                if let Ok(resp) =
+                    ec2.describe_instances().filters(filter("instance-id", insts)).send().await
+                {
+                    for res in resp.reservations() {
+                        for i in res.instances() {
+                            if let Some(id) = i.instance_id() {
+                                found.insert(id.into(), dt(i.launch_time()));
+                            }
+                        }
+                    }
+                }
+            }
+            let keys = ids("key-");
+            if !keys.is_empty() {
+                if let Ok(resp) =
+                    ec2.describe_key_pairs().filters(filter("key-pair-id", keys)).send().await
+                {
+                    for k in resp.key_pairs() {
+                        if let Some(id) = k.key_pair_id() {
+                            found.insert(id.into(), dt(k.create_time()));
+                        }
+                    }
+                }
+            }
+            let lts = ids("lt-");
+            if !lts.is_empty() {
+                if let Ok(resp) = ec2
+                    .describe_launch_templates()
+                    .filters(filter("launch-template-id", lts))
+                    .send()
+                    .await
+                {
+                    for lt in resp.launch_templates() {
+                        if let Some(id) = lt.launch_template_id() {
+                            found.insert(id.into(), dt(lt.create_time()));
+                        }
+                    }
+                }
+            }
+            items
+                .into_iter()
+                .map(|(arn, rest)| {
+                    let v = found.get(&tail(&rest)).cloned().flatten();
+                    (arn, v)
+                })
+                .collect()
+        }
+        "iam" => {
+            let iam = aws_sdk_iam::Client::new(&s.0.shared);
+            let mut out = Vec::new();
+            for (arn, rest) in items {
+                let name = tail(&rest);
+                let v = if rest.starts_with("role/") {
+                    iam.get_role().role_name(&name).send().await.ok().and_then(|o| {
+                        o.role().and_then(|r| dt(Some(r.create_date())))
+                    })
+                } else if rest.starts_with("user/") {
+                    iam.get_user().user_name(&name).send().await.ok().and_then(|o| {
+                        o.user().and_then(|u| dt(Some(u.create_date())))
+                    })
+                } else {
+                    None
+                };
+                out.push((arn, v));
+            }
+            out
+        }
+        "logs" => {
+            let logs = aws_sdk_cloudwatchlogs::Client::from_conf(
+                aws_sdk_cloudwatchlogs::config::Builder::from(&s.0.shared).region(rg()).build(),
+            );
+            let mut out = Vec::new();
+            for (arn, rest) in items {
+                let name =
+                    rest.strip_prefix("log-group:").unwrap_or(&rest).trim_end_matches(":*").to_string();
+                let v = logs
+                    .describe_log_groups()
+                    .log_group_name_prefix(&name)
+                    .send()
+                    .await
+                    .ok()
+                    .and_then(|o| {
+                        o.log_groups()
+                            .iter()
+                            .find(|g| g.log_group_name() == Some(name.as_str()))
+                            .and_then(|g| g.creation_time())
+                    })
+                    .and_then(chrono::DateTime::from_timestamp_millis)
+                    .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+                out.push((arn, v));
+            }
+            out
+        }
+        "dynamodb" => {
+            let ddb = aws_sdk_dynamodb::Client::from_conf(
+                aws_sdk_dynamodb::config::Builder::from(&s.0.shared).region(rg()).build(),
+            );
+            let mut out = Vec::new();
+            for (arn, rest) in items {
+                let v = ddb.describe_table().table_name(tail(&rest)).send().await.ok().and_then(|o| {
+                    o.table().and_then(|t| dt(t.creation_date_time()))
+                });
+                out.push((arn, v));
+            }
+            out
+        }
+        "acm" => {
+            let acm = aws_sdk_acm::Client::from_conf(
+                aws_sdk_acm::config::Builder::from(&s.0.shared).region(rg()).build(),
+            );
+            let mut out = Vec::new();
+            for (arn, _rest) in items {
+                let v = acm.describe_certificate().certificate_arn(&arn).send().await.ok().and_then(
+                    |o| o.certificate().and_then(|c| dt(c.created_at())),
+                );
+                out.push((arn, v));
+            }
+            out
+        }
+        "secretsmanager" => {
+            let sm = aws_sdk_secretsmanager::Client::from_conf(
+                aws_sdk_secretsmanager::config::Builder::from(&s.0.shared).region(rg()).build(),
+            );
+            let mut out = Vec::new();
+            for (arn, _rest) in items {
+                let v = sm.describe_secret().secret_id(&arn).send().await.ok().and_then(|o| dt(o.created_date()));
+                out.push((arn, v));
+            }
+            out
+        }
+        "ecr" => {
+            let ecr = aws_sdk_ecr::Client::from_conf(
+                aws_sdk_ecr::config::Builder::from(&s.0.shared).region(rg()).build(),
+            );
+            let mut out = Vec::new();
+            for (arn, rest) in items {
+                let name = rest.strip_prefix("repository/").unwrap_or(&rest).to_string();
+                let v = ecr.describe_repositories().repository_names(name).send().await.ok().and_then(
+                    |o| o.repositories().first().and_then(|r| dt(r.created_at())),
+                );
+                out.push((arn, v));
+            }
+            out
+        }
+        "cognito-idp" => {
+            let cog = aws_sdk_cognitoidentityprovider::Client::from_conf(
+                aws_sdk_cognitoidentityprovider::config::Builder::from(&s.0.shared).region(rg()).build(),
+            );
+            let mut out = Vec::new();
+            for (arn, rest) in items {
+                let v = cog.describe_user_pool().user_pool_id(tail(&rest)).send().await.ok().and_then(
+                    |o| o.user_pool().and_then(|p| dt(p.creation_date())),
+                );
+                out.push((arn, v));
+            }
+            out
+        }
+        _ => items.into_iter().map(|(arn, _)| (arn, None)).collect(),
+    }
 }

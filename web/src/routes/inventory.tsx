@@ -7,12 +7,13 @@ import {
   getCoreRowModel,
   useReactTable,
   type ColumnDef,
+  type ColumnSizingState,
   type OnChangeFn,
   type RowData,
   type TableMeta,
   type VisibilityState,
 } from "@tanstack/react-table";
-import { addApp, getInventory, reclassify, setMarked, updateApp, type InventoryData, type ResourceRow } from "../api";
+import { addApp, getCreated, getInventory, reclassify, setMarked, updateApp, type InventoryData, type ResourceRow } from "../api";
 import { Stat, Spinner, Button } from "../components/ui";
 import { cn, usd } from "../lib/utils";
 import { consoleUrl } from "../lib/console";
@@ -26,18 +27,21 @@ const TONE: Record<string, string> = {
 };
 
 // Selection is shared across every group's table, so it rides table meta rather
-// than TanStack's per-table row-selection state.
+// than TanStack's per-table row-selection state; so do the lazily-resolved
+// creation dates.
 declare module "@tanstack/react-table" {
   interface TableMeta<TData extends RowData> {
     selected: Set<string>;
     toggleSelect: (arn: string) => void;
     toggleGroup: (items: ResourceRow[], on: boolean) => void;
-    multiAccount: boolean;
+    /** arn → creation date; null = unavailable; absent = not resolved yet. */
+    created: Record<string, string | null>;
+    /** ARNs with a created-date request in flight (cells show a spinner). */
+    createdPending: Set<string>;
   }
   interface ColumnMeta<TData extends RowData, TValue> {
     /** Human label in the Columns menu. */
     label?: string;
-    width?: string;
     thClass?: string;
     tdClass?: string;
   }
@@ -45,11 +49,17 @@ declare module "@tanstack/react-table" {
 
 const fmtCost = (c: number) => (c > 0 && c < 0.005 ? "<$0.01" : usd(c));
 
+/** Truncating text cell whose hover title is its own full value. */
+const titled = (v: string | null | undefined) => (v ? <span title={v}>{v}</span> : null);
+
 const columns: ColumnDef<ResourceRow>[] = [
   {
     id: "select",
     enableHiding: false,
-    meta: { width: "2.5rem", thClass: "px-3 py-1.5", tdClass: "px-3 py-1.5" },
+    enableResizing: false,
+    size: 40,
+    minSize: 40,
+    meta: { thClass: "px-3 py-1.5", tdClass: "px-3 py-1.5" },
     header: ({ table }) => {
       const m = table.options.meta!;
       const rows = table.getRowModel().rows.map((r) => r.original);
@@ -80,7 +90,9 @@ const columns: ColumnDef<ResourceRow>[] = [
   {
     id: "name",
     enableHiding: false,
-    meta: { label: "name", width: "40%", tdClass: "truncate px-2 py-1.5 text-neutral-300" },
+    size: 440,
+    minSize: 160,
+    meta: { label: "name", tdClass: "truncate px-2 py-1.5 text-neutral-300" },
     header: "name",
     cell: ({ row }) => {
       const r = row.original;
@@ -117,58 +129,84 @@ const columns: ColumnDef<ResourceRow>[] = [
   },
   {
     id: "region",
-    meta: { label: "region", width: "12%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    size: 110,
+    meta: { label: "region", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
     header: "region",
-    cell: ({ row, table }) => (
-      <>
-        {row.original.region}
-        {table.options.meta!.multiAccount && row.original.accountName && (
-          <span className="ml-1.5 text-neutral-600">· {row.original.accountName}</span>
-        )}
-      </>
-    ),
+    cell: ({ row }) => titled(row.original.region),
   },
   {
     id: "account",
-    meta: { label: "account", width: "12%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    size: 130,
+    meta: { label: "account", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
     header: "account",
-    cell: ({ row }) => row.original.accountName || row.original.account || "",
+    cell: ({ row }) => titled(row.original.accountName || row.original.account),
   },
   {
     id: "service",
-    meta: { label: "service", width: "10%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    size: 100,
+    meta: { label: "service", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
     header: "service",
-    cell: ({ row }) => row.original.service,
+    cell: ({ row }) => titled(row.original.service),
   },
   {
     id: "type",
-    meta: { label: "type", width: "24%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    size: 190,
+    meta: { label: "type", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
     header: "type",
-    cell: ({ row }) => <span title={row.original.reason}>{row.original.type}</span>,
+    // Types repeat their service prefix (ec2:volume) — strip it for the cell,
+    // keep the full string on hover.
+    cell: ({ row }) => {
+      const r = row.original;
+      const short = r.type.startsWith(`${r.service}:`) ? r.type.slice(r.service.length + 1) : r.type;
+      return <span title={r.type}>{short}</span>;
+    },
   },
   {
     id: "stack",
-    meta: { label: "stack", width: "16%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    size: 180,
+    meta: { label: "stack", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
     header: "stack",
-    cell: ({ row }) => row.original.stack ?? "",
+    cell: ({ row }) => titled(row.original.stack),
   },
   {
     id: "reason",
-    meta: { label: "reason", width: "22%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    size: 240,
+    meta: { label: "reason", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
     header: "reason",
-    cell: ({ row }) => row.original.reason,
+    cell: ({ row }) => titled(row.original.reason),
   },
   {
     id: "lastReported",
-    meta: { label: "last seen", width: "7rem", tdClass: "px-2 py-1.5 tabular-nums text-neutral-500" },
+    size: 105,
+    meta: { label: "last seen", tdClass: "truncate px-2 py-1.5 tabular-nums text-neutral-500" },
     header: "last seen",
-    cell: ({ row }) => row.original.lastReported?.slice(0, 10) ?? "",
+    cell: ({ row }) => {
+      const v = row.original.lastReported;
+      return v ? <span title={v}>{v.slice(0, 10)}</span> : null;
+    },
+  },
+  {
+    id: "created",
+    size: 105,
+    meta: { label: "created", tdClass: "truncate px-2 py-1.5 tabular-nums text-neutral-500" },
+    header: "created",
+    cell: ({ row, table }) => {
+      const m = table.options.meta!;
+      const v = m.created[row.original.arn];
+      if (v === undefined) {
+        return m.createdPending.has(row.original.arn) ? (
+          <span className="inline-block h-3 w-3 animate-spin rounded-full border border-neutral-700 border-t-neutral-400" />
+        ) : null;
+      }
+      if (v === null) return <span className="text-neutral-700">—</span>;
+      return <span title={v}>{v.slice(0, 10)}</span>;
+    },
   },
   {
     id: "cost",
+    size: 90,
     meta: {
       label: "est $/mo",
-      width: "6.5rem",
       thClass: "px-3 py-1.5 text-right font-medium",
       tdClass: "px-3 py-1.5 text-right tabular-nums text-neutral-400",
     },
@@ -181,48 +219,68 @@ const columns: ColumnDef<ResourceRow>[] = [
   },
 ];
 
-// Hidden-by-default columns; the user's picks persist in localStorage.
+// Hidden-by-default columns; the user's picks (and column widths) persist in
+// localStorage.
 const DEFAULT_VISIBILITY: VisibilityState = {
   account: false,
   service: false,
   stack: false,
   reason: false,
   lastReported: false,
+  created: false,
 };
 const VIS_KEY = "manifest.inventory.columns";
+const SIZE_KEY = "manifest.inventory.columnSizes";
 
 function GroupTable({
   items,
   columnVisibility,
   onColumnVisibilityChange,
+  columnSizing,
+  onColumnSizingChange,
   meta,
 }: {
   items: ResourceRow[];
   columnVisibility: VisibilityState;
   onColumnVisibilityChange: OnChangeFn<VisibilityState>;
+  columnSizing: ColumnSizingState;
+  onColumnSizingChange: OnChangeFn<ColumnSizingState>;
   meta: TableMeta<ResourceRow>;
 }) {
   const table = useReactTable({
     data: items,
     columns,
-    state: { columnVisibility },
+    state: { columnVisibility, columnSizing },
     onColumnVisibilityChange,
+    onColumnSizingChange,
+    columnResizeMode: "onChange",
+    enableColumnResizing: true,
+    defaultColumn: { minSize: 56 },
     getCoreRowModel: getCoreRowModel(),
     meta,
   });
   return (
-    <table className="w-full table-fixed text-sm">
-      <colgroup>
-        {table.getVisibleLeafColumns().map((c) => (
-          <col key={c.id} style={{ width: c.columnDef.meta?.width }} />
-        ))}
-      </colgroup>
+    <table className="min-w-full table-fixed text-sm" style={{ width: table.getTotalSize() }}>
       <thead>
         {table.getHeaderGroups().map((hg) => (
           <tr key={hg.id} className="border-b border-neutral-800/60 text-left text-[11px] uppercase tracking-wide text-neutral-600">
             {hg.headers.map((h) => (
-              <th key={h.id} className={h.column.columnDef.meta?.thClass ?? "px-2 py-1.5 font-medium"}>
+              <th
+                key={h.id}
+                style={{ width: h.getSize() }}
+                className={cn("relative", h.column.columnDef.meta?.thClass ?? "px-2 py-1.5 font-medium")}
+              >
                 {flexRender(h.column.columnDef.header, h.getContext())}
+                {h.column.getCanResize() && (
+                  <span
+                    onMouseDown={h.getResizeHandler()}
+                    onTouchStart={h.getResizeHandler()}
+                    className={cn(
+                      "absolute right-0 top-0 h-full w-1.5 cursor-col-resize touch-none select-none",
+                      h.column.getIsResizing() ? "bg-neutral-500" : "hover:bg-neutral-700",
+                    )}
+                  />
+                )}
               </th>
             ))}
           </tr>
@@ -288,6 +346,46 @@ export default function Inventory() {
   useEffect(() => {
     localStorage.setItem(VIS_KEY, JSON.stringify(columnVisibility));
   }, [columnVisibility]);
+  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(SIZE_KEY) ?? "{}") as ColumnSizingState;
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem(SIZE_KEY, JSON.stringify(columnSizing));
+  }, [columnSizing]);
+
+  // Lazily-resolved creation dates: only queried while the created column is
+  // shown, only for rows in open groups, and never re-queried once resolved
+  // (the server caches them durably too).
+  const [created, setCreated] = useState<Record<string, string | null>>({});
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const createdOn = columnVisibility.created === true;
+  useEffect(() => {
+    if (!createdOn || !data) return;
+    const want = [
+      ...new Set(
+        data.resources
+          .filter((r) => open.has(r.app ?? r.category))
+          .map((r) => r.arn)
+          .filter((a) => !(a in created) && !pending.has(a)),
+      ),
+    ].slice(0, 300);
+    if (want.length === 0) return;
+    setPending((p) => new Set([...p, ...want]));
+    getCreated(token, want)
+      .then((res) => setCreated((c) => ({ ...c, ...res.created })))
+      .catch(() => {})
+      .finally(() =>
+        setPending((p) => {
+          const n = new Set(p);
+          for (const a of want) n.delete(a);
+          return n;
+        }),
+      );
+  }, [createdOn, data, open, created, pending, token]);
 
   // Initial load, then a background revalidate on each token renewal — the page
   // keeps showing the last data instead of blanking to the spinner. Mutations
@@ -556,13 +654,14 @@ export default function Inventory() {
         <Stat label="Apps" value={appNames.length} />
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="filter by name / type / arn…"
           className="min-w-48 flex-1 rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-1.5 text-sm outline-none placeholder:text-neutral-600 focus:border-neutral-600"
         />
+        <div className="flex shrink-0 items-center gap-2">
         <select
           value={region}
           onChange={(e) => setRegion(e.target.value)}
@@ -589,6 +688,8 @@ export default function Inventory() {
             ))}
           </select>
         )}
+        </div>
+        <div className="flex shrink-0 items-center gap-4">
         <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-neutral-400">
           <input
             type="checkbox"
@@ -607,6 +708,8 @@ export default function Inventory() {
           />
           Only marked
         </label>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
         <button
           onClick={toggleAll}
           className="rounded-md border border-neutral-800 px-3 py-1.5 text-sm text-neutral-400 hover:text-neutral-200"
@@ -655,6 +758,7 @@ export default function Inventory() {
           + Add app
         </button>
         {refreshing && <span className="text-xs text-neutral-500">updating…</span>}
+        </div>
       </div>
 
       {showForm && editKey === null && (
@@ -770,7 +874,9 @@ export default function Inventory() {
                     items={items}
                     columnVisibility={columnVisibility}
                     onColumnVisibilityChange={setColumnVisibility}
-                    meta={{ selected, toggleSelect, toggleGroup, multiAccount }}
+                    columnSizing={columnSizing}
+                    onColumnSizingChange={setColumnSizing}
+                    meta={{ selected, toggleSelect, toggleGroup, created, createdPending: pending }}
                   />
                 </div>
               )}
