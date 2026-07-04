@@ -7,6 +7,17 @@ name: deploy
 on:
   push:
     branches: [main]
+    # Only what the deploy ships: the three build units, the root manifests
+    # that shape their installs, and this workflow itself. Docs-only merges
+    # no longer redeploy.
+    paths:
+      - web/**
+      - api/**
+      - infra/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/deploy.yml
   workflow_dispatch:
 
 permissions:
@@ -54,7 +65,7 @@ jobs:
           node-version: 'lts/*'
           cache: pnpm
 
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
       - name: Build Lambda (arm64)
         run: cd api && cargo lambda build --release --arm64 --bin manifest-api
       - name: Build SPA
