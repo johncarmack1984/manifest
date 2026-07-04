@@ -10,7 +10,8 @@ export default function Overview() {
   const cost = useAsync(() => getCost(token), [token]);
   const inv = useAsync(() => getInventory(token), [token]);
 
-  if (cost.loading || inv.loading) return <Spinner label="Loading dashboard…" />;
+  if ((cost.loading && !cost.data) || (inv.loading && !inv.data))
+    return <Spinner label="Loading dashboard…" />;
   if (cost.error || !cost.data) return <div className="text-sm text-red-400">Error: {cost.error}</div>;
 
   const c = cost.data;

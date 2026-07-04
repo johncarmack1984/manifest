@@ -11,7 +11,7 @@ export default function Cost() {
   const token = useAuth().user?.id_token;
   const { data, loading, error } = useAsync(() => getCost(token), [token]);
 
-  if (loading) return <Spinner label="Loading cost…" />;
+  if (loading && !data) return <Spinner label="Loading cost…" />;
   if (error || !data) return <div className="text-sm text-red-400">Error: {error}</div>;
 
   return (
