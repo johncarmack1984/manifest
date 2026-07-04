@@ -21,13 +21,13 @@ pub async fn handler(
     Query(q): Query<Refresh>,
 ) -> Result<Json<Value>, StatusCode> {
     if !q.requested() {
-        if let Some(v) = crate::cache_get(&s, "inventory:v2").await {
+        if let Some(v) = crate::cache_get(&s, "inventory:v3").await {
             return Ok(Json(v));
         }
     }
     match compute(&s).await {
         Ok(v) => {
-            crate::cache_put(&s, "inventory:v2", &v).await;
+            crate::cache_put(&s, "inventory:v3", &v).await;
             Ok(Json(v))
         }
         Err(e) => {
@@ -300,6 +300,127 @@ async fn app_cost(s: &AppState, registry: &Registry) -> std::collections::BTreeM
     out
 }
 
+/// Estimated monthly spend per Cost Explorer resource id, from resource-level data
+/// (the last ~13 full days, scaled to a 30.44-day month). Opt-in only: it needs
+/// "daily granularity resource-level data" enabled in the payer account's Cost
+/// Explorer preferences, or this returns empty and the cost column stays blank.
+/// Best-effort like `app_cost`, and rides the same inventory cache.
+async fn resource_costs(s: &AppState) -> BTreeMap<String, f64> {
+    use aws_sdk_costexplorer::types::{
+        DateInterval, Dimension, DimensionValues, Expression, Granularity, GroupDefinition,
+        GroupDefinitionType,
+    };
+
+    // Resource-level retention is 14 days; stay a day inside it.
+    const WINDOW_DAYS: i64 = 13;
+    let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    let today = chrono::Utc::now().date_naive();
+    let start = (today - chrono::Duration::days(WINDOW_DAYS)).format("%Y-%m-%d").to_string();
+    let end = today.format("%Y-%m-%d").to_string();
+    let Ok(interval) = DateInterval::builder().start(start).end(end).build() else {
+        return out;
+    };
+    // The API requires a Filter; usage records are also exactly what per-resource
+    // cost means (tax/refund/credit lines carry no resource id).
+    let usage_only = Expression::builder()
+        .dimensions(DimensionValues::builder().key(Dimension::RecordType).values("Usage").build())
+        .build();
+
+    let mut next: Option<String> = None;
+    loop {
+        let mut req = s
+            .0
+            .ce
+            .get_cost_and_usage_with_resources()
+            .time_period(interval.clone())
+            .granularity(Granularity::Daily)
+            .metrics("UnblendedCost")
+            .filter(usage_only.clone())
+            .group_by(
+                GroupDefinition::builder()
+                    .r#type(GroupDefinitionType::Dimension)
+                    .key("RESOURCE_ID")
+                    .build(),
+            );
+        if let Some(t) = &next {
+            req = req.next_page_token(t);
+        }
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(
+                    "per-resource cost unavailable (enable daily resource-level data in \
+                     the payer account's Cost Explorer preferences?): {e}"
+                );
+                return BTreeMap::new();
+            }
+        };
+        for period in resp.results_by_time() {
+            for g in period.groups() {
+                let key = g.keys().first().cloned().unwrap_or_default();
+                if key.is_empty() || key == "NoResourceId" {
+                    continue;
+                }
+                let amt = g
+                    .metrics()
+                    .and_then(|m| m.get("UnblendedCost"))
+                    .and_then(|v| v.amount())
+                    .unwrap_or("0")
+                    .parse::<f64>()
+                    .unwrap_or(0.0);
+                if amt > 0.0 {
+                    *out.entry(key).or_default() += amt;
+                }
+            }
+        }
+        next = resp.next_page_token().map(|t| t.to_string());
+        if next.is_none() {
+            break;
+        }
+    }
+
+    let scale = 30.44 / WINDOW_DAYS as f64;
+    for v in out.values_mut() {
+        *v *= scale;
+    }
+    out
+}
+
+/// Attach per-resource cost estimates to inventory rows. Cost Explorer resource ids
+/// are full ARNs for some services and bare ids/names for others (EC2 instance ids,
+/// S3 bucket names), so try the exact ARN, then the ARN's trailing id, then the
+/// display name. Each cost entry lands on at most one resource; a resource billed
+/// under several ids accumulates.
+fn attach_costs(resources: &mut [Value], costs: BTreeMap<String, f64>) {
+    use std::collections::HashMap;
+    if costs.is_empty() {
+        return;
+    }
+    let mut by_arn: HashMap<String, usize> = HashMap::new();
+    let mut by_tail: HashMap<String, usize> = HashMap::new();
+    let mut by_name: HashMap<String, usize> = HashMap::new();
+    for (i, r) in resources.iter().enumerate() {
+        let arn = r["arn"].as_str().unwrap_or_default();
+        if arn.is_empty() {
+            continue;
+        }
+        by_arn.entry(arn.to_string()).or_insert(i);
+        if let Some(tail) = arn.rsplit(['/', ':']).next().filter(|t| !t.is_empty()) {
+            by_tail.entry(tail.to_string()).or_insert(i);
+        }
+        if let Some(name) = r["name"].as_str().filter(|n| !n.is_empty()) {
+            by_name.entry(name.to_string()).or_insert(i);
+        }
+    }
+    for (key, amt) in costs {
+        let idx = by_arn.get(&key).or_else(|| by_tail.get(&key)).or_else(|| by_name.get(&key));
+        if let Some(&i) = idx {
+            let prev = resources[i]["cost"].as_f64().unwrap_or(0.0);
+            resources[i]["cost"] = json!(prev + amt);
+        }
+    }
+}
+
 async fn compute(s: &AppState) -> Res<Value> {
     let registry = Registry::from_dynamo(&s.0.ddb, &s.0.cfg.cache_table).await;
     let regions = scan_regions(&s.0.cfg.indexed_regions);
@@ -366,6 +487,9 @@ async fn compute(s: &AppState) -> Res<Value> {
         }
     }
 
+    // 4. Per-resource cost estimates (best-effort; blank column when not opted in).
+    attach_costs(&mut resources, resource_costs(s).await);
+
     let mut by_region: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_app: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_category: BTreeMap<String, usize> = BTreeMap::new();
@@ -391,6 +515,15 @@ async fn compute(s: &AppState) -> Res<Value> {
         .count();
     let app_cost = app_cost(s, &registry).await;
 
+    // Registry definitions, keyed by app — drives the dashboard's rule editor. On a
+    // duplicate repo the first entry wins, matching `match_project` precedence.
+    let mut app_meta = serde_json::Map::new();
+    for p in &registry.projects {
+        app_meta
+            .entry(p.repo.clone())
+            .or_insert_with(|| serde_json::to_value(p).unwrap_or(Value::Null));
+    }
+
     Ok(json!({
         "count": resources.len(),
         "resources": resources,
@@ -400,6 +533,7 @@ async fn compute(s: &AppState) -> Res<Value> {
         "byAccount": by_account,
         "byAppCost": app_cost,
         "apps": registry.projects.iter().map(|p| p.repo.as_str()).collect::<std::collections::BTreeSet<_>>(),
+        "appMeta": app_meta,
         "flags": {
             "orphans": by_category.get("orphan").copied().unwrap_or(0),
             "unclaimed": by_category.get("unclaimed").copied().unwrap_or(0),

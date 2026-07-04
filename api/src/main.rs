@@ -124,7 +124,7 @@ async fn main() -> Result<(), Error> {
         .route("/api/inventory", get(inventory::handler))
         .route("/api/inventory/classify", post(inventory::reclassify))
         .route("/api/inventory/mark", post(inventory::mark))
-        .route("/api/registry/app", post(add_app))
+        .route("/api/registry/app", post(add_app).put(update_app))
         .with_state(state);
 
     run(app).await
@@ -145,6 +145,22 @@ async fn add_app(
         Ok(()) => Ok(Json(json!({ "ok": true, "repo": req.repo.trim() }))),
         Err(e) => {
             tracing::warn!("add_app failed: {e}");
+            Err((axum::http::StatusCode::UNPROCESSABLE_ENTITY, e))
+        }
+    }
+}
+
+// Update an existing app's registry rules (patterns/types/protected/dead/reason),
+// in place — so auto-tagging stays editable after creation.
+async fn update_app(
+    State(s): State<AppState>,
+    _u: auth::AuthUser,
+    Json(req): Json<manifest_api::registry::NewApp>,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    match manifest_api::registry::update_app(&s.0.ddb, &s.0.cfg.cache_table, &req).await {
+        Ok(()) => Ok(Json(json!({ "ok": true, "repo": req.repo.trim() }))),
+        Err(e) => {
+            tracing::warn!("update_app failed: {e}");
             Err((axum::http::StatusCode::UNPROCESSABLE_ENTITY, e))
         }
     }
