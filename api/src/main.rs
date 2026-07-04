@@ -36,7 +36,6 @@ pub struct Inner {
     pub re: aws_sdk_resourceexplorer2::Client,
     pub ddb: aws_sdk_dynamodb::Client,
     pub org: aws_sdk_organizations::Client,
-    pub acm: aws_sdk_acm::Client,
     /// Base config (this account's creds + region) — used to build assume-role
     /// providers for cross-account inventory of org member accounts.
     pub shared: aws_config::SdkConfig,
@@ -111,7 +110,6 @@ async fn main() -> Result<(), Error> {
         re: aws_sdk_resourceexplorer2::Client::new(&shared),
         ddb: aws_sdk_dynamodb::Client::new(&shared),
         org: aws_sdk_organizations::Client::new(&shared),
-        acm: aws_sdk_acm::Client::new(&shared),
         jwks: auth::JwksCache::default(),
         cfg: Config::from_env(),
         shared,

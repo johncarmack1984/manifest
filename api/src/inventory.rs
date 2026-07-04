@@ -21,13 +21,13 @@ pub async fn handler(
     Query(q): Query<Refresh>,
 ) -> Result<Json<Value>, StatusCode> {
     if !q.requested() {
-        if let Some(v) = crate::cache_get(&s, "inventory:v4").await {
+        if let Some(v) = crate::cache_get(&s, "inventory:v5").await {
             return Ok(Json(v));
         }
     }
     match compute(&s).await {
         Ok(v) => {
-            crate::cache_put(&s, "inventory:v4", &v).await;
+            crate::cache_put(&s, "inventory:v5", &v).await;
             Ok(Json(v))
         }
         Err(e) => {
@@ -184,6 +184,23 @@ async fn list_member_accounts(
 /// every region is queried against its own index + default view; regions without an
 /// index simply error and are skipped. Returns Err only if no region was queryable
 /// (assume-role denied, or Resource Explorer not enabled), so the account is flagged.
+/// An SdkConfig carrying the member account's assumed read role (a single STS
+/// call, then cached by the provider); per-region clients derive from it with the
+/// region overridden.
+async fn member_cfg(s: &AppState, account_id: &str) -> aws_config::SdkConfig {
+    let role_arn = format!("arn:aws:iam::{account_id}:role/{}", s.0.cfg.member_role);
+    let provider = aws_config::sts::AssumeRoleProvider::builder(role_arn)
+        .session_name("manifest-inventory")
+        .configure(&s.0.shared)
+        .build()
+        .await;
+    aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .credentials_provider(provider)
+        .region(aws_config::Region::new("us-east-1"))
+        .load()
+        .await
+}
+
 async fn scan_member(
     s: &AppState,
     registry: &Registry,
@@ -192,19 +209,7 @@ async fn scan_member(
     account_name: &str,
     out: &mut Vec<Value>,
 ) -> Res<()> {
-    let role_arn = format!("arn:aws:iam::{account_id}:role/{}", s.0.cfg.member_role);
-    let provider = aws_config::sts::AssumeRoleProvider::builder(role_arn)
-        .session_name("manifest-inventory")
-        .configure(&s.0.shared)
-        .build()
-        .await;
-    // One SdkConfig holds the assumed credentials (a single STS call, then cached);
-    // per-region clients are derived from it with the region overridden.
-    let member_cfg = aws_config::defaults(aws_config::BehaviorVersion::latest())
-        .credentials_provider(provider)
-        .region(aws_config::Region::new("us-east-1"))
-        .load()
-        .await;
+    let member_cfg = member_cfg(s, account_id).await;
 
     let mut queried_any = false;
     let mut last_err: Option<String> = None;
@@ -431,10 +436,8 @@ fn attach_costs(resources: &mut [Value], costs: BTreeMap<String, f64>) {
 /// first alias, a hosted zone its domain — so both classify by the domain patterns.
 /// One List call each, local account only; empty on error (rows keep their ids).
 /// Same idea as the ACM domain lookup.
-async fn global_names(s: &AppState) -> std::collections::HashMap<String, String> {
-    let mut out = std::collections::HashMap::new();
-
-    let cf = aws_sdk_cloudfront::Client::new(&s.0.shared);
+async fn names_from(cfg: &aws_config::SdkConfig, out: &mut std::collections::HashMap<String, String>) {
+    let cf = aws_sdk_cloudfront::Client::new(cfg);
     match cf.list_distributions().send().await {
         Ok(resp) => {
             let items = resp.distribution_list().map(|l| l.items()).unwrap_or_default();
@@ -447,7 +450,7 @@ async fn global_names(s: &AppState) -> std::collections::HashMap<String, String>
         Err(e) => tracing::warn!("cloudfront:ListDistributions unavailable: {e}"),
     }
 
-    let r53 = aws_sdk_route53::Client::new(&s.0.shared);
+    let r53 = aws_sdk_route53::Client::new(cfg);
     match r53.list_hosted_zones().send().await {
         Ok(resp) => {
             for z in resp.hosted_zones() {
@@ -456,6 +459,21 @@ async fn global_names(s: &AppState) -> std::collections::HashMap<String, String>
             }
         }
         Err(e) => tracing::warn!("route53:ListHostedZones unavailable: {e}"),
+    }
+}
+
+async fn global_names(s: &AppState) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    names_from(&s.0.shared, &mut out).await;
+    // Member accounts too — distribution/zone ids are globally unique, so one
+    // shared map serves every row.
+    if !s.0.cfg.member_role.is_empty() {
+        if let Ok(accounts) = list_member_accounts(&s.0.org, &s.0.cfg.account_id).await {
+            for (id, _name) in accounts {
+                let cfg = member_cfg(s, &id).await;
+                names_from(&cfg, &mut out).await;
+            }
+        }
     }
     out
 }
@@ -469,10 +487,18 @@ async fn compute(s: &AppState) -> Res<Value> {
     let mut not_indexed: Vec<Value> = Vec::new();
 
     // 1. The account manifest runs in, via its own manifest-owned aggregator view.
+    //    ACM is regional, so certificates need a client in THEIR region — a fixed
+    //    one resolves only its own region's cert domains and leaves the rest UUIDs.
     for region in &regions {
+        let endpoint = if region == "global" { "us-east-1" } else { region.as_str() };
+        let acm = aws_sdk_acm::Client::from_conf(
+            aws_sdk_acm::config::Builder::from(&s.0.shared)
+                .region(aws_config::Region::new(endpoint.to_string()))
+                .build(),
+        );
         scan_region(
             &s.0.re,
-            &s.0.acm,
+            &acm,
             Some(&s.0.cfg.view_arn),
             region,
             &registry,
@@ -510,9 +536,6 @@ async fn compute(s: &AppState) -> Res<Value> {
         for r in &mut resources {
             let rtype = r["type"].as_str().unwrap_or_default().to_string();
             if rtype != "cloudfront:distribution" && rtype != "route53:hostedzone" {
-                continue;
-            }
-            if r["account"].as_str() != Some(s.0.cfg.account_id.as_str()) {
                 continue;
             }
             let Some(name) = gnames.get(r["name"].as_str().unwrap_or_default()).cloned() else {
@@ -732,40 +755,48 @@ async fn resolve_created(s: &AppState, arns: &[String]) -> Vec<(String, Option<S
     use std::collections::HashMap;
     let mut out: Vec<(String, Option<String>)> = Vec::new();
     let mut buckets: Vec<(String, String)> = Vec::new();
-    let mut grouped: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
+    // ("" = local account) → the describes run under that account's credentials.
+    let mut grouped: HashMap<(String, String, String), Vec<(String, String)>> = HashMap::new();
 
     for arn in arns {
         let Some((service, region, account, rest)) = arn_parts(arn) else {
             out.push((arn.clone(), None));
             continue;
         };
-        // S3 ARNs carry no region/account; everything else must be local — the
-        // member-account role only grants Resource Explorer reads.
+        // S3 ARNs carry no region/account; resolved against every account below.
         if service == "s3" {
             buckets.push((arn.clone(), rest));
             continue;
         }
-        if !account.is_empty() && account != s.0.cfg.account_id {
+        let account_key = if account.is_empty() || account == s.0.cfg.account_id {
+            String::new()
+        } else if !s.0.cfg.member_role.is_empty() {
+            account
+        } else {
             out.push((arn.clone(), None));
             continue;
-        }
+        };
         let region = if region.is_empty() { "us-east-1".into() } else { region };
-        grouped.entry((service, region)).or_default().push((arn.clone(), rest));
+        grouped.entry((account_key, service, region)).or_default().push((arn.clone(), rest));
     }
 
-    // One ListBuckets covers every bucket.
+    let mut cfgs: HashMap<String, aws_config::SdkConfig> = HashMap::new();
+
+    // One ListBuckets per account covers every bucket; members fill local misses.
     if !buckets.is_empty() {
-        let s3 = aws_sdk_s3::Client::new(&s.0.shared);
-        let mut by_name: HashMap<String, Option<String>> = HashMap::new();
-        match s3.list_buckets().send().await {
-            Ok(resp) => {
-                for b in resp.buckets() {
-                    if let Some(n) = b.name() {
-                        by_name.insert(n.to_string(), dt(b.creation_date()));
+        let mut by_name = bucket_dates(&s.0.shared).await;
+        if buckets.iter().any(|(_, n)| !by_name.contains_key(n)) && !s.0.cfg.member_role.is_empty() {
+            if let Ok(accounts) = list_member_accounts(&s.0.org, &s.0.cfg.account_id).await {
+                for (id, _name) in accounts {
+                    if !cfgs.contains_key(&id) {
+                        let c = member_cfg(s, &id).await;
+                        cfgs.insert(id.clone(), c);
+                    }
+                    for (n, v) in bucket_dates(&cfgs[&id]).await {
+                        by_name.entry(n).or_insert(v);
                     }
                 }
             }
-            Err(e) => tracing::warn!("created: s3:ListBuckets failed: {e}"),
         }
         for (arn, name) in buckets {
             let v = by_name.get(&name).cloned().flatten();
@@ -773,15 +804,39 @@ async fn resolve_created(s: &AppState, arns: &[String]) -> Vec<(String, Option<S
         }
     }
 
-    for ((service, region), items) in grouped {
-        out.extend(created_for(s, &service, &region, items).await);
+    for ((account, service, region), items) in grouped {
+        if !account.is_empty() && !cfgs.contains_key(&account) {
+            let c = member_cfg(s, &account).await;
+            cfgs.insert(account.clone(), c);
+        }
+        let cfg = if account.is_empty() { &s.0.shared } else { &cfgs[&account] };
+        out.extend(created_for(cfg, &service, &region, items).await);
     }
     out
 }
 
+/// Bucket name → creation date for one account's credentials.
+async fn bucket_dates(
+    cfg: &aws_config::SdkConfig,
+) -> std::collections::HashMap<String, Option<String>> {
+    let mut by_name = std::collections::HashMap::new();
+    let s3 = aws_sdk_s3::Client::new(cfg);
+    match s3.list_buckets().send().await {
+        Ok(resp) => {
+            for b in resp.buckets() {
+                if let Some(n) = b.name() {
+                    by_name.insert(n.to_string(), dt(b.creation_date()));
+                }
+            }
+        }
+        Err(e) => tracing::warn!("created: s3:ListBuckets failed: {e}"),
+    }
+    by_name
+}
+
 /// Creation dates for one (service, region) batch; unsupported types → None.
 async fn created_for(
-    s: &AppState,
+    shared: &aws_config::SdkConfig,
     service: &str,
     region: &str,
     items: Vec<(String, String)>,
@@ -793,7 +848,7 @@ async fn created_for(
     match service {
         "ec2" => {
             let ec2 = aws_sdk_ec2::Client::from_conf(
-                aws_sdk_ec2::config::Builder::from(&s.0.shared).region(rg()).build(),
+                aws_sdk_ec2::config::Builder::from(shared).region(rg()).build(),
             );
             let mut found: HashMap<String, Option<String>> = HashMap::new();
             let ids = |prefix: &str| -> Vec<String> {
@@ -865,7 +920,7 @@ async fn created_for(
         // bounded concurrency so a bulk prefetch of the whole inventory resolves in
         // seconds rather than crawling one call at a time.
         "iam" => {
-            let iam = aws_sdk_iam::Client::new(&s.0.shared);
+            let iam = aws_sdk_iam::Client::new(shared);
             each(items, move |arn, rest| {
                 let iam = iam.clone();
                 async move {
@@ -888,7 +943,7 @@ async fn created_for(
         }
         "logs" => {
             let logs = aws_sdk_cloudwatchlogs::Client::from_conf(
-                aws_sdk_cloudwatchlogs::config::Builder::from(&s.0.shared).region(rg()).build(),
+                aws_sdk_cloudwatchlogs::config::Builder::from(shared).region(rg()).build(),
             );
             each(items, move |arn, rest| {
                 let logs = logs.clone();
@@ -919,7 +974,7 @@ async fn created_for(
         }
         "dynamodb" => {
             let ddb = aws_sdk_dynamodb::Client::from_conf(
-                aws_sdk_dynamodb::config::Builder::from(&s.0.shared).region(rg()).build(),
+                aws_sdk_dynamodb::config::Builder::from(shared).region(rg()).build(),
             );
             each(items, move |arn, rest| {
                 let ddb = ddb.clone();
@@ -935,7 +990,7 @@ async fn created_for(
         }
         "acm" => {
             let acm = aws_sdk_acm::Client::from_conf(
-                aws_sdk_acm::config::Builder::from(&s.0.shared).region(rg()).build(),
+                aws_sdk_acm::config::Builder::from(shared).region(rg()).build(),
             );
             each(items, move |arn, _rest| {
                 let acm = acm.clone();
@@ -954,7 +1009,7 @@ async fn created_for(
         }
         "secretsmanager" => {
             let sm = aws_sdk_secretsmanager::Client::from_conf(
-                aws_sdk_secretsmanager::config::Builder::from(&s.0.shared).region(rg()).build(),
+                aws_sdk_secretsmanager::config::Builder::from(shared).region(rg()).build(),
             );
             each(items, move |arn, _rest| {
                 let sm = sm.clone();
@@ -973,7 +1028,7 @@ async fn created_for(
         }
         "ecr" => {
             let ecr = aws_sdk_ecr::Client::from_conf(
-                aws_sdk_ecr::config::Builder::from(&s.0.shared).region(rg()).build(),
+                aws_sdk_ecr::config::Builder::from(shared).region(rg()).build(),
             );
             each(items, move |arn, rest| {
                 let ecr = ecr.clone();
@@ -993,7 +1048,7 @@ async fn created_for(
         }
         "cognito-idp" => {
             let cog = aws_sdk_cognitoidentityprovider::Client::from_conf(
-                aws_sdk_cognitoidentityprovider::config::Builder::from(&s.0.shared).region(rg()).build(),
+                aws_sdk_cognitoidentityprovider::config::Builder::from(shared).region(rg()).build(),
             );
             each(items, move |arn, rest| {
                 let cog = cog.clone();
