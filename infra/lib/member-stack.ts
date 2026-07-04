@@ -50,6 +50,31 @@ export class ManifestMemberStack extends cdk.Stack {
               actions: ['acm:DescribeCertificate'],
               resources: ['*'],
             }),
+            // Mirrors the payer Lambda's read-only grants, so member-account rows get
+            // the same display-name resolution and "created on" lookups.
+            new iam.PolicyStatement({
+              sid: 'GlobalNameRead',
+              actions: ['cloudfront:ListDistributions', 'route53:ListHostedZones'],
+              resources: ['*'],
+            }),
+            new iam.PolicyStatement({
+              sid: 'CreatedOnRead',
+              actions: [
+                'ec2:DescribeVolumes',
+                'ec2:DescribeInstances',
+                'ec2:DescribeKeyPairs',
+                'ec2:DescribeLaunchTemplates',
+                's3:ListAllMyBuckets',
+                'iam:GetRole',
+                'iam:GetUser',
+                'logs:DescribeLogGroups',
+                'dynamodb:DescribeTable',
+                'secretsmanager:DescribeSecret',
+                'ecr:DescribeRepositories',
+                'cognito-idp:DescribeUserPool',
+              ],
+              resources: ['*'],
+            }),
           ],
         }),
       },

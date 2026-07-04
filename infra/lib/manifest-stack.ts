@@ -64,6 +64,10 @@ export class ManifestStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: 'expires_at',
       removalPolicy: cdk.RemovalPolicy.DESTROY,
+      // Mostly rebuildable cache — but the live project registry (the operator's
+      // attribution knowledge, edited from the dashboard) lives here too, so 35
+      // days of point-in-time restore is cheap insurance against a bad write.
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
     });
 
     // ---------------------------------------------------------------------
@@ -76,6 +80,7 @@ export class ManifestStack extends cdk.Stack {
       partitionKey: { name: 'arn', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
     });
 
     // ---------------------------------------------------------------------

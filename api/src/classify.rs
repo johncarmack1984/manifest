@@ -100,6 +100,8 @@ const TOOLING_MARKERS: &[&str] = &[
     "sst-asset",
     "aws-sam-cli",
     "cargo-lambda-role",
+    // The GitHub Actions OIDC trust anchor — CI plumbing shared by every repo.
+    "token.actions.githubusercontent.com",
 ];
 
 /// Display (and classification) name for a resource ARN. The generic tail-of-ARN is
@@ -155,6 +157,8 @@ pub fn classify(
         // roles (AWSReservedSSO_…) are AWS-owned plumbing, surfaced once we scan global.
         || lname.starts_with("awsservicerolefor")
         || lname.starts_with("awsreservedsso_")
+        // Identity Center's SAML providers (AWSSSO_…_DO_NOT_DELETE) are AWS-owned.
+        || lname.starts_with("awssso_")
         || name == "AwsDataCatalog"
         // Service-owned secrets (events!connection/…, rds!db-…): '!' can't appear in a
         // user-created secret name, and the owning service manages their lifecycle.
