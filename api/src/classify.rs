@@ -49,6 +49,11 @@ const AWS_MANAGED_TYPES: &[&str] = &[
     "ec2:internet-gateway",
     "ec2:dhcp-options",
     "ec2:security-group-rule",
+    // Derivative launch/registration records — the real resource is the ec2:instance.
+    // Both accumulate ghosts in Resource Explorer's index long after deletion (every
+    // Auto Scaling / Batch scale-out leaves an instant-fleet record behind).
+    "ec2:fleet",
+    "ssm:managed-instance",
     "lambda:layer/version",
     "lambda:function/version",
     "resource-explorer-2:index",
