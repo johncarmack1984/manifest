@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
-import { ChevronRight, ExternalLink, Pencil } from "lucide-react";
+import { Check, ChevronRight, Columns3, ExternalLink, Pencil } from "lucide-react";
+import { Menu } from "@base-ui-components/react/menu";
 import { useAuth } from "react-oidc-context";
+import {
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+  type ColumnDef,
+  type OnChangeFn,
+  type RowData,
+  type TableMeta,
+  type VisibilityState,
+} from "@tanstack/react-table";
 import { addApp, getInventory, reclassify, setMarked, updateApp, type InventoryData, type ResourceRow } from "../api";
 import { Stat, Spinner, Button } from "../components/ui";
 import { cn, usd } from "../lib/utils";
@@ -13,6 +24,230 @@ const TONE: Record<string, string> = {
   tooling: "text-neutral-500",
   "aws-managed": "text-neutral-500",
 };
+
+// Selection is shared across every group's table, so it rides table meta rather
+// than TanStack's per-table row-selection state.
+declare module "@tanstack/react-table" {
+  interface TableMeta<TData extends RowData> {
+    selected: Set<string>;
+    toggleSelect: (arn: string) => void;
+    toggleGroup: (items: ResourceRow[], on: boolean) => void;
+    multiAccount: boolean;
+  }
+  interface ColumnMeta<TData extends RowData, TValue> {
+    /** Human label in the Columns menu. */
+    label?: string;
+    width?: string;
+    thClass?: string;
+    tdClass?: string;
+  }
+}
+
+const fmtCost = (c: number) => (c > 0 && c < 0.005 ? "<$0.01" : usd(c));
+
+const columns: ColumnDef<ResourceRow>[] = [
+  {
+    id: "select",
+    enableHiding: false,
+    meta: { width: "2.5rem", thClass: "px-3 py-1.5", tdClass: "px-3 py-1.5" },
+    header: ({ table }) => {
+      const m = table.options.meta!;
+      const rows = table.getRowModel().rows.map((r) => r.original);
+      const allSel = rows.length > 0 && rows.every((r) => m.selected.has(r.arn));
+      return (
+        <input
+          type="checkbox"
+          aria-label="select all in group"
+          checked={allSel}
+          onChange={(e) => m.toggleGroup(rows, e.target.checked)}
+          className="accent-neutral-300"
+        />
+      );
+    },
+    cell: ({ row, table }) => {
+      const m = table.options.meta!;
+      return (
+        <input
+          type="checkbox"
+          aria-label={`select ${row.original.name}`}
+          checked={m.selected.has(row.original.arn)}
+          onChange={() => m.toggleSelect(row.original.arn)}
+          className="accent-neutral-300"
+        />
+      );
+    },
+  },
+  {
+    id: "name",
+    enableHiding: false,
+    meta: { label: "name", width: "40%", tdClass: "truncate px-2 py-1.5 text-neutral-300" },
+    header: "name",
+    cell: ({ row }) => {
+      const r = row.original;
+      const url = consoleUrl(r);
+      return (
+        <span title={r.arn}>
+          {url ? (
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-white hover:underline"
+              title="open in AWS console"
+            >
+              {r.name}
+              <ExternalLink className="mb-0.5 ml-1 inline h-3 w-3 text-neutral-600" />
+            </a>
+          ) : (
+            r.name
+          )}
+          {r.override && (
+            <span className="ml-1.5 text-[10px] uppercase tracking-wide text-sky-400" title="manually classified">
+              override
+            </span>
+          )}
+          {r.mark && (
+            <span className="ml-1.5 text-[10px] uppercase tracking-wide text-red-400" title="marked for deletion">
+              marked
+            </span>
+          )}
+        </span>
+      );
+    },
+  },
+  {
+    id: "region",
+    meta: { label: "region", width: "12%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    header: "region",
+    cell: ({ row, table }) => (
+      <>
+        {row.original.region}
+        {table.options.meta!.multiAccount && row.original.accountName && (
+          <span className="ml-1.5 text-neutral-600">· {row.original.accountName}</span>
+        )}
+      </>
+    ),
+  },
+  {
+    id: "account",
+    meta: { label: "account", width: "12%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    header: "account",
+    cell: ({ row }) => row.original.accountName || row.original.account || "",
+  },
+  {
+    id: "service",
+    meta: { label: "service", width: "10%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    header: "service",
+    cell: ({ row }) => row.original.service,
+  },
+  {
+    id: "type",
+    meta: { label: "type", width: "24%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    header: "type",
+    cell: ({ row }) => <span title={row.original.reason}>{row.original.type}</span>,
+  },
+  {
+    id: "stack",
+    meta: { label: "stack", width: "16%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    header: "stack",
+    cell: ({ row }) => row.original.stack ?? "",
+  },
+  {
+    id: "reason",
+    meta: { label: "reason", width: "22%", tdClass: "truncate px-2 py-1.5 text-neutral-500" },
+    header: "reason",
+    cell: ({ row }) => row.original.reason,
+  },
+  {
+    id: "lastReported",
+    meta: { label: "last seen", width: "7rem", tdClass: "px-2 py-1.5 tabular-nums text-neutral-500" },
+    header: "last seen",
+    cell: ({ row }) => row.original.lastReported?.slice(0, 10) ?? "",
+  },
+  {
+    id: "cost",
+    meta: {
+      label: "est $/mo",
+      width: "6.5rem",
+      thClass: "px-3 py-1.5 text-right font-medium",
+      tdClass: "px-3 py-1.5 text-right tabular-nums text-neutral-400",
+    },
+    header: () => (
+      <span title="estimated monthly run rate — the last ~2 weeks of resource-level Cost Explorer data, scaled to 30 days">
+        est $/mo
+      </span>
+    ),
+    cell: ({ row }) => (row.original.cost != null ? fmtCost(row.original.cost) : ""),
+  },
+];
+
+// Hidden-by-default columns; the user's picks persist in localStorage.
+const DEFAULT_VISIBILITY: VisibilityState = {
+  account: false,
+  service: false,
+  stack: false,
+  reason: false,
+  lastReported: false,
+};
+const VIS_KEY = "manifest.inventory.columns";
+
+function GroupTable({
+  items,
+  columnVisibility,
+  onColumnVisibilityChange,
+  meta,
+}: {
+  items: ResourceRow[];
+  columnVisibility: VisibilityState;
+  onColumnVisibilityChange: OnChangeFn<VisibilityState>;
+  meta: TableMeta<ResourceRow>;
+}) {
+  const table = useReactTable({
+    data: items,
+    columns,
+    state: { columnVisibility },
+    onColumnVisibilityChange,
+    getCoreRowModel: getCoreRowModel(),
+    meta,
+  });
+  return (
+    <table className="w-full table-fixed text-sm">
+      <colgroup>
+        {table.getVisibleLeafColumns().map((c) => (
+          <col key={c.id} style={{ width: c.columnDef.meta?.width }} />
+        ))}
+      </colgroup>
+      <thead>
+        {table.getHeaderGroups().map((hg) => (
+          <tr key={hg.id} className="border-b border-neutral-800/60 text-left text-[11px] uppercase tracking-wide text-neutral-600">
+            {hg.headers.map((h) => (
+              <th key={h.id} className={h.column.columnDef.meta?.thClass ?? "px-2 py-1.5 font-medium"}>
+                {flexRender(h.column.columnDef.header, h.getContext())}
+              </th>
+            ))}
+          </tr>
+        ))}
+      </thead>
+      <tbody>
+        {table.getRowModel().rows.map((row) => (
+          <tr
+            key={row.original.arn}
+            className={cn(
+              "border-b border-neutral-800/40 last:border-0 hover:bg-neutral-900/40",
+              row.original.mark && "bg-red-950/20",
+            )}
+          >
+            {row.getVisibleCells().map((cell) => (
+              <td key={cell.id} className={cell.column.columnDef.meta?.tdClass}>
+                {flexRender(cell.column.columnDef.cell, cell.getContext())}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
 export default function Inventory() {
   const token = useAuth().user?.id_token;
@@ -38,6 +273,21 @@ export default function Inventory() {
   const [editKey, setEditKey] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState("");
+
+  // Column picks survive reloads; unknown/missing keys fall back to the defaults.
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
+    try {
+      return {
+        ...DEFAULT_VISIBILITY,
+        ...(JSON.parse(localStorage.getItem(VIS_KEY) ?? "{}") as VisibilityState),
+      };
+    } catch {
+      return DEFAULT_VISIBILITY;
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem(VIS_KEY, JSON.stringify(columnVisibility));
+  }, [columnVisibility]);
 
   // Initial load, then a background revalidate on each token renewal — the page
   // keeps showing the last data instead of blanking to the spinner. Mutations
@@ -363,6 +613,41 @@ export default function Inventory() {
         >
           {allOpen ? "Collapse all" : "Expand all"}
         </button>
+        <Menu.Root>
+          <Menu.Trigger className="inline-flex items-center gap-1.5 rounded-md border border-neutral-800 px-3 py-1.5 text-sm text-neutral-400 hover:text-neutral-200">
+            <Columns3 className="h-3.5 w-3.5" />
+            Columns
+          </Menu.Trigger>
+          <Menu.Portal>
+            <Menu.Positioner sideOffset={6} align="start">
+              <Menu.Popup className="z-20 min-w-40 rounded-md border border-neutral-700 bg-neutral-900 py-1 text-sm shadow-lg outline-none">
+                {columns
+                  .filter((c) => c.enableHiding !== false)
+                  .map((c) => {
+                    const id = c.id ?? "";
+                    return (
+                      <Menu.CheckboxItem
+                        key={id}
+                        checked={columnVisibility[id] !== false}
+                        onCheckedChange={(checked) =>
+                          setColumnVisibility((v) => ({ ...v, [id]: checked }))
+                        }
+                        closeOnClick={false}
+                        className="flex cursor-default select-none items-center gap-2 px-3 py-1.5 text-neutral-300 outline-none data-[highlighted]:bg-neutral-800"
+                      >
+                        <span className="inline-flex h-3.5 w-3.5 items-center justify-center">
+                          <Menu.CheckboxItemIndicator>
+                            <Check className="h-3.5 w-3.5" />
+                          </Menu.CheckboxItemIndicator>
+                        </span>
+                        {c.meta?.label ?? id}
+                      </Menu.CheckboxItem>
+                    );
+                  })}
+              </Menu.Popup>
+            </Menu.Positioner>
+          </Menu.Portal>
+        </Menu.Root>
         <button
           onClick={openAdd}
           className="rounded-md border border-neutral-800 px-3 py-1.5 text-sm text-neutral-400 hover:text-neutral-200"
@@ -445,7 +730,6 @@ export default function Inventory() {
         {sorted.map(([key, items]) => {
           const isOpen = open.has(key);
           const cat = items[0].category;
-          const allSel = items.every((r) => selected.has(r.arn));
           return (
             <div key={key} className="overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900/30">
               <div className="flex w-full items-center gap-2 px-4 py-2.5 hover:bg-neutral-900/50">
@@ -482,99 +766,12 @@ export default function Inventory() {
               )}
               {isOpen && (
                 <div className="overflow-x-auto border-t border-neutral-800/60">
-                  <table className="w-full table-fixed text-sm">
-                    <colgroup>
-                      <col style={{ width: "2.5rem" }} />
-                      <col style={{ width: "40%" }} />
-                      <col style={{ width: "14%" }} />
-                      <col style={{ width: "28%" }} />
-                      <col style={{ width: "6.5rem" }} />
-                    </colgroup>
-                    <thead>
-                      <tr className="border-b border-neutral-800/60 text-left text-[11px] uppercase tracking-wide text-neutral-600">
-                        <th className="px-3 py-1.5">
-                          <input
-                            type="checkbox"
-                            aria-label="select all in group"
-                            checked={allSel}
-                            onChange={(e) => toggleGroup(items, e.target.checked)}
-                            className="accent-neutral-300"
-                          />
-                        </th>
-                        <th className="px-2 py-1.5 font-medium">name</th>
-                        <th className="px-2 py-1.5 font-medium">region</th>
-                        <th className="px-2 py-1.5 font-medium">type</th>
-                        <th
-                          className="px-3 py-1.5 text-right font-medium"
-                          title="estimated monthly run rate — the last ~2 weeks of resource-level Cost Explorer data, scaled to 30 days"
-                        >
-                          est $/mo
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {items.map((r) => {
-                        const url = consoleUrl(r);
-                        return (
-                          <tr
-                            key={r.arn}
-                            className={cn(
-                              "border-b border-neutral-800/40 last:border-0 hover:bg-neutral-900/40",
-                              r.mark && "bg-red-950/20",
-                            )}
-                          >
-                            <td className="px-3 py-1.5">
-                              <input
-                                type="checkbox"
-                                aria-label={`select ${r.name}`}
-                                checked={selected.has(r.arn)}
-                                onChange={() => toggleSelect(r.arn)}
-                                className="accent-neutral-300"
-                              />
-                            </td>
-                            <td className="truncate px-2 py-1.5 text-neutral-300" title={r.arn}>
-                              {url ? (
-                                <a
-                                  href={url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="hover:text-white hover:underline"
-                                  title="open in AWS console"
-                                >
-                                  {r.name}
-                                  <ExternalLink className="mb-0.5 ml-1 inline h-3 w-3 text-neutral-600" />
-                                </a>
-                              ) : (
-                                r.name
-                              )}
-                              {r.override && (
-                                <span className="ml-1.5 text-[10px] uppercase tracking-wide text-sky-400" title="manually classified">
-                                  override
-                                </span>
-                              )}
-                              {r.mark && (
-                                <span className="ml-1.5 text-[10px] uppercase tracking-wide text-red-400" title="marked for deletion">
-                                  marked
-                                </span>
-                              )}
-                            </td>
-                            <td className="truncate px-2 py-1.5 text-neutral-500">
-                              {r.region}
-                              {multiAccount && r.accountName && (
-                                <span className="ml-1.5 text-neutral-600">· {r.accountName}</span>
-                              )}
-                            </td>
-                            <td className="truncate px-2 py-1.5 text-neutral-500" title={r.reason}>
-                              {r.type}
-                            </td>
-                            <td className="px-3 py-1.5 text-right tabular-nums text-neutral-400">
-                              {r.cost != null && (r.cost > 0 && r.cost < 0.005 ? "<$0.01" : usd(r.cost))}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                  <GroupTable
+                    items={items}
+                    columnVisibility={columnVisibility}
+                    onColumnVisibilityChange={setColumnVisibility}
+                    meta={{ selected, toggleSelect, toggleGroup, multiAccount }}
+                  />
                 </div>
               )}
             </div>

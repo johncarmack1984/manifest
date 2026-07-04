@@ -51,6 +51,10 @@ export interface ResourceRow {
   mark?: string | null;
   /** Estimated monthly spend (resource-level Cost Explorer data); absent when unknown. */
   cost?: number;
+  /** Owning CloudFormation stack (from its cost-allocation tag), when any. */
+  stack?: string | null;
+  /** When Resource Explorer last saw the resource (ISO 8601). */
+  lastReported?: string | null;
 }
 /** An app's registry definition — the rules behind its automatic attribution. */
 export interface AppMeta {
