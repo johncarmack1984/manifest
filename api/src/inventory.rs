@@ -106,7 +106,7 @@ async fn scan_region(
             let arn = r.arn().unwrap_or_default().to_string();
             let rtype = r.resource_type().unwrap_or_default().to_string();
             let service = r.service().unwrap_or_default().to_string();
-            let mut name = arn.rsplit(['/', ':']).next().unwrap_or("").to_string();
+            let mut name = manifest_api::classify::display_name(&arn, &rtype);
             // ACM certs are UUID-named in Resource Explorer; surface the domain
             // instead — both as the display name and so it classifies by project.
             if rtype == "acm:certificate" {
