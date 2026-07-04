@@ -39,11 +39,11 @@ export default function Inventory() {
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState("");
 
-  // Initial load (and on sign-in). Mutations update local state directly, so this
-  // only runs once per token — no full reload on every change.
+  // Initial load, then a background revalidate on each token renewal — the page
+  // keeps showing the last data instead of blanking to the spinner. Mutations
+  // update local state directly, so this only runs once per token.
   useEffect(() => {
     let live = true;
-    setData(null);
     setError("");
     getInventory(token)
       .then((d) => live && setData(d))

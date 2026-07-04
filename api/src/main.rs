@@ -184,6 +184,25 @@ async fn public_config(State(s): State<AppState>) -> Json<Value> {
 }
 
 // ---- DynamoDB-backed response cache (Cost Explorer charges $0.01/call) ----
+//
+// Bodies are stored gzipped: the inventory payload outgrew DynamoDB's 400 KB item
+// cap, and an oversized put means the cache silently never hits — every page load
+// becomes a full multi-region recompute (plus metered CE calls). Compressed, the
+// same payload is a few dozen KB.
+
+fn gzip(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    let _ = enc.write_all(bytes);
+    enc.finish().unwrap_or_default()
+}
+
+fn gunzip(bytes: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(bytes).read_to_end(&mut out).ok()?;
+    Some(out)
+}
 
 pub async fn cache_get(s: &AppState, key: &str) -> Option<Value> {
     let out = s
@@ -204,20 +223,65 @@ pub async fn cache_get(s: &AppState, key: &str) -> Option<Value> {
     if exp < Utc::now().timestamp() {
         return None;
     }
+    if let Some(gz) = item.get("body_gz").and_then(|v| v.as_b().ok()) {
+        return serde_json::from_slice(&gunzip(gz.as_ref())?).ok();
+    }
+    // Plain-JSON items written before compression landed.
     let body = item.get("body")?.as_s().ok()?;
     serde_json::from_str(body).ok()
 }
 
 pub async fn cache_put(s: &AppState, key: &str, v: &Value) {
     let exp = Utc::now().timestamp() + s.0.cfg.cache_ttl;
-    let _ = s
+    let gz = gzip(v.to_string().as_bytes());
+    let res = s
         .0
         .ddb
         .put_item()
         .table_name(&s.0.cfg.cache_table)
         .item("cache_key", AttributeValue::S(key.to_string()))
-        .item("body", AttributeValue::S(v.to_string()))
+        .item("body_gz", AttributeValue::B(aws_sdk_dynamodb::primitives::Blob::new(gz)))
         .item("expires_at", AttributeValue::N(exp.to_string()))
         .send()
         .await;
+    // A failed write must be visible — a silent one turns every request into a
+    // recompute and looks like anything but a cache problem from the outside.
+    if let Err(e) = res {
+        tracing::warn!("cache write for {key} failed: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gunzip, gzip};
+
+    #[test]
+    fn oversized_payload_fits_after_compression() {
+        // The regression this guards: the inventory JSON crossed DynamoDB's
+        // 400 KB item cap, so uncompressed cache writes failed on every compute.
+        // A representative >400 KB payload must round-trip and land far under
+        // the cap once gzipped.
+        let rows: Vec<serde_json::Value> = (0..1500)
+            .map(|i| {
+                serde_json::json!({
+                    "arn": format!("arn:aws:lambda:us-east-1:735853783919:function:app-{i}-fn"),
+                    "type": "lambda:function",
+                    "region": "us-east-1",
+                    "service": "lambda",
+                    "name": format!("app-{i}-fn"),
+                    "category": "app",
+                    "app": format!("app-{i}"),
+                    "protected": false,
+                    "reason": format!("project 'app-{i}'"),
+                    "account": "735853783919",
+                    "accountName": "this account",
+                })
+            })
+            .collect();
+        let body = serde_json::json!({ "resources": rows }).to_string();
+        assert!(body.len() > 400_000, "fixture must exceed the DynamoDB item cap");
+        let gz = gzip(body.as_bytes());
+        assert!(gz.len() < 100_000, "compressed body should fit with headroom, got {}", gz.len());
+        assert_eq!(gunzip(&gz).as_deref(), Some(body.as_bytes()));
+    }
 }
