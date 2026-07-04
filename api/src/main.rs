@@ -124,6 +124,7 @@ async fn main() -> Result<(), Error> {
         .route("/api/inventory", get(inventory::handler))
         .route("/api/inventory/classify", post(inventory::reclassify))
         .route("/api/inventory/mark", post(inventory::mark))
+        .route("/api/inventory/created", post(inventory::created))
         .route("/api/registry/app", post(add_app).put(update_app))
         .with_state(state);
 
@@ -232,7 +233,13 @@ pub async fn cache_get(s: &AppState, key: &str) -> Option<Value> {
 }
 
 pub async fn cache_put(s: &AppState, key: &str, v: &Value) {
-    let exp = Utc::now().timestamp() + s.0.cfg.cache_ttl;
+    cache_put_ttl(s, key, v, s.0.cfg.cache_ttl).await;
+}
+
+/// Like `cache_put`, for entries whose freshness isn't tied to the standard TTL
+/// (e.g. resource creation dates, which never change).
+pub async fn cache_put_ttl(s: &AppState, key: &str, v: &Value, ttl: i64) {
+    let exp = Utc::now().timestamp() + ttl;
     let gz = gzip(v.to_string().as_bytes());
     let res = s
         .0

@@ -146,6 +146,11 @@ export const reclassify = (token: string | undefined, arns: string[], app: strin
 export const setMarked = (token: string | undefined, arns: string[], marked: boolean) =>
   post<{ ok: boolean; count: number }>("/api/inventory/mark", token, { arns, marked });
 
+/** Best-effort creation dates by ARN (null = unavailable for that type). Resolved
+ *  lazily for the "created" column and cached server-side — dates never change. */
+export const getCreated = (token: string | undefined, arns: string[]) =>
+  post<{ created: Record<string, string | null> }>("/api/inventory/created", token, { arns });
+
 export interface NewApp {
   repo: string;
   patterns?: string[];
