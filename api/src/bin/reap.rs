@@ -428,7 +428,7 @@ fn row_from(r: &Resource, reg: &Registry) -> Row {
     let rtype = r.resource_type().unwrap_or_default().to_string();
     let region = r.region().unwrap_or_default().to_string();
     let service = r.service().unwrap_or_default().to_string();
-    let name = arn.rsplit(['/', ':']).next().unwrap_or("").to_string();
+    let name = manifest_api::classify::display_name(&arn, &rtype);
     let tags = tags_of(r);
     let stack = tags.get("aws:cloudformation:stack-name").cloned();
     let c = classify(&name, &rtype, &service, stack.as_deref(), reg);

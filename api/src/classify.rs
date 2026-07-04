@@ -49,6 +49,15 @@ const AWS_MANAGED_TYPES: &[&str] = &[
     "ec2:internet-gateway",
     "ec2:dhcp-options",
     "ec2:security-group-rule",
+    // Derivative launch/registration records — the real resource is the ec2:instance.
+    // Both accumulate ghosts in Resource Explorer's index long after deletion (every
+    // Auto Scaling / Batch scale-out leaves an instant-fleet record behind).
+    "ec2:fleet",
+    "ssm:managed-instance",
+    // Sub-resources of an HTTP API — attributed/deleted through their parent API.
+    "apigateway:apis/stages",
+    "apigateway:apis/routes",
+    "apigateway:apis/integrations",
     "lambda:layer/version",
     "lambda:function/version",
     "resource-explorer-2:index",
@@ -84,6 +93,43 @@ const TOOLING_MARKERS: &[&str] = &[
     "aws-sam-cli",
 ];
 
+/// Display (and classification) name for a resource ARN. The generic tail-of-ARN is
+/// right for most types, but pathed names would lose their meaningful prefix to it:
+/// the secret `lux/apple-signing` would surface (and classify!) as its random-suffixed
+/// tail `apple-signing-7zTvyl`, and `/aws/batch/job` as `job`. Keep the path for the
+/// types that carry one.
+pub fn display_name(arn: &str, rtype: &str) -> String {
+    fn tail(a: &str) -> String {
+        a.rsplit(['/', ':']).next().unwrap_or("").to_string()
+    }
+    let name = match rtype {
+        // arn:…:secret:PATH/NAME-XXXXXX — keep the path, drop Secrets Manager's
+        // random six-character suffix.
+        "secretsmanager:secret" => {
+            let name = arn.splitn(7, ':').nth(6).unwrap_or_default();
+            name.rsplit_once('-').map(|(base, _)| base).unwrap_or(name).to_string()
+        }
+        // arn:…:log-group:/aws/lambda/foo (sometimes ":*"-suffixed) — the path IS the name.
+        "logs:log-group" => {
+            arn.splitn(7, ':').nth(6).unwrap_or_default().trim_end_matches(":*").to_string()
+        }
+        // arn:…:parameter/jobs/origin-secret — keep the full parameter path.
+        "ssm:parameter" => {
+            arn.split_once(":parameter").map(|(_, p)| p.to_string()).unwrap_or_default()
+        }
+        // arn:…:job-definition/name:3 — the family name (with revision), not "3".
+        "batch:job-definition" => {
+            arn.split_once("job-definition/").map(|(_, p)| p.to_string()).unwrap_or_default()
+        }
+        _ => tail(arn),
+    };
+    if name.is_empty() {
+        tail(arn)
+    } else {
+        name
+    }
+}
+
 pub fn classify(
     name: &str,
     rtype: &str,
@@ -101,6 +147,9 @@ pub fn classify(
         || lname.starts_with("awsservicerolefor")
         || lname.starts_with("awsreservedsso_")
         || name == "AwsDataCatalog"
+        // Service-owned secrets (events!connection/…, rds!db-…): '!' can't appear in a
+        // user-created secret name, and the owning service manages their lifecycle.
+        || (rtype == "secretsmanager:secret" && name.contains('!'))
         || (service == "apprunner" && !name.is_empty() && name.chars().all(|c| c == '0' || c == '1'))
     {
         return Classification {
@@ -164,4 +213,34 @@ fn from_registry(reg: &Registry, text: &str, rtype: &str) -> Option<Classificati
             },
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_name;
+
+    #[test]
+    fn pathed_names_keep_their_prefix() {
+        let cases = [
+            // Secrets keep the namespace and lose the random suffix.
+            (
+                "arn:aws:secretsmanager:us-west-1:1:secret:lux/apple-signing-7zTvyl",
+                "secretsmanager:secret",
+                "lux/apple-signing",
+            ),
+            // Log groups are their full path.
+            ("arn:aws:logs:us-east-2:1:log-group:/aws/batch/job", "logs:log-group", "/aws/batch/job"),
+            ("arn:aws:logs:us-east-2:1:log-group:/john-voice/train:*", "logs:log-group", "/john-voice/train"),
+            // SSM parameters keep their path.
+            ("arn:aws:ssm:us-east-1:1:parameter/jobs/origin-secret", "ssm:parameter", "/jobs/origin-secret"),
+            // Batch job definitions are the family:revision, not the revision.
+            ("arn:aws:batch:us-east-2:1:job-definition/train:2", "batch:job-definition", "train:2"),
+            // Everything else stays the ARN tail.
+            ("arn:aws:s3:::my-bucket", "s3:bucket", "my-bucket"),
+            ("arn:aws:ec2:us-east-1:1:instance/i-0abc", "ec2:instance", "i-0abc"),
+        ];
+        for (arn, rtype, want) in cases {
+            assert_eq!(display_name(arn, rtype), want, "for {arn}");
+        }
+    }
 }
