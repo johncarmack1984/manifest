@@ -49,6 +49,17 @@ export interface ResourceRow {
   override?: boolean;
   /** "marked" once flagged for deletion (consumed by the reap tool); absent otherwise. */
   mark?: string | null;
+  /** Estimated monthly spend (resource-level Cost Explorer data); absent when unknown. */
+  cost?: number;
+}
+/** An app's registry definition — the rules behind its automatic attribution. */
+export interface AppMeta {
+  repo: string;
+  patterns?: string[];
+  types?: string[];
+  protected?: boolean;
+  dead?: boolean;
+  reason?: string;
 }
 /** An org member account the API tried but couldn't inventory (no role / no RE). */
 export interface NotIndexed {
@@ -67,6 +78,8 @@ export interface InventoryData {
   byAppCost?: Record<string, number>;
   /** Every app defined in the registry — so the picker can show them even when empty. */
   apps?: string[];
+  /** Registry definitions keyed by app — drives the rule editor. */
+  appMeta?: Record<string, AppMeta>;
   flags: { orphans: number; unclaimed: number; marked: number; notIndexed?: NotIndexed[] };
   indexedRegions: string[];
   generatedAt: string;
@@ -93,10 +106,15 @@ async function sha256Hex(s: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function post<T>(path: string, token: string | undefined, body: unknown): Promise<T> {
+async function send<T>(
+  method: "POST" | "PUT",
+  path: string,
+  token: string | undefined,
+  body: unknown,
+): Promise<T> {
   const payload = JSON.stringify(body);
   const r = await fetch(path, {
-    method: "POST",
+    method,
     headers: {
       ...authHeaders(token),
       "Content-Type": "application/json",
@@ -112,6 +130,8 @@ async function post<T>(path: string, token: string | undefined, body: unknown): 
   if (!r.ok) throw new Error((await r.text().catch(() => "")) || `${path} returned ${r.status}`);
   return r.json();
 }
+const post = <T,>(path: string, token: string | undefined, body: unknown) =>
+  send<T>("POST", path, token, body);
 
 /** Attribute resources to an app, or pass null to clear the override (back to inferred). */
 export const reclassify = (token: string | undefined, arns: string[], app: string | null) =>
@@ -125,6 +145,7 @@ export const setMarked = (token: string | undefined, arns: string[], marked: boo
 export interface NewApp {
   repo: string;
   patterns?: string[];
+  types?: string[];
   protected?: boolean;
   dead?: boolean;
   reason?: string;
@@ -132,6 +153,10 @@ export interface NewApp {
 /** Add an app to the project registry (persists; the next inventory load reflects it). */
 export const addApp = (token: string | undefined, app: NewApp) =>
   post<{ ok: boolean; repo: string }>("/api/registry/app", token, app);
+
+/** Rewrite an existing app's registry rules in place (patterns/types/protected/dead/reason). */
+export const updateApp = (token: string | undefined, app: NewApp) =>
+  send<{ ok: boolean; repo: string }>("PUT", "/api/registry/app", token, app);
 
 /** Force the API to recompute (bypass the 1h server cache), then callers reload. */
 export async function bustCache(token: string | undefined) {

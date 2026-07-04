@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { ChevronRight, ExternalLink } from "lucide-react";
+import { ChevronRight, ExternalLink, Pencil } from "lucide-react";
 import { useAuth } from "react-oidc-context";
-import { addApp, getInventory, reclassify, setMarked, type InventoryData, type ResourceRow } from "../api";
+import { addApp, getInventory, reclassify, setMarked, updateApp, type InventoryData, type ResourceRow } from "../api";
 import { Stat, Spinner, Button } from "../components/ui";
 import { cn, usd } from "../lib/utils";
 import { consoleUrl } from "../lib/console";
@@ -31,10 +31,13 @@ export default function Inventory() {
   const [target, setTarget] = useState("");
   const [actionError, setActionError] = useState("");
 
-  // Add-app form.
-  const [showAddApp, setShowAddApp] = useState(false);
-  const [newApp, setNewApp] = useState({ repo: "", patterns: "", protected: false });
-  const [addAppError, setAddAppError] = useState("");
+  // Add/edit-app form. `editKey` is the app being edited (null ⇒ adding a new one);
+  // the same form serves both, so rules stay editable after creation.
+  const emptyForm = { repo: "", patterns: "", types: "", protected: false, dead: false, reason: "" };
+  const [showForm, setShowForm] = useState(false);
+  const [editKey, setEditKey] = useState<string | null>(null);
+  const [form, setForm] = useState(emptyForm);
+  const [formError, setFormError] = useState("");
 
   // Initial load (and on sign-in). Mutations update local state directly, so this
   // only runs once per token — no full reload on every change.
@@ -168,23 +171,130 @@ export default function Inventory() {
       (r) => ({ ...r, mark: marked ? "marked" : null }),
     );
 
-  const submitAddApp = async () => {
-    const repo = newApp.repo.trim();
+  const openAdd = () => {
+    setForm(emptyForm);
+    setFormError("");
+    setEditKey(null);
+    setShowForm((v) => !v || editKey !== null);
+  };
+  const openEdit = (key: string) => {
+    const m = inv.appMeta?.[key];
+    if (!m) return;
+    setForm({
+      repo: key,
+      patterns: (m.patterns ?? []).join(", "),
+      types: (m.types ?? []).join(", "),
+      protected: !!m.protected,
+      dead: !!m.dead,
+      reason: m.reason ?? "",
+    });
+    setFormError("");
+    setEditKey(key);
+    setShowForm(true);
+  };
+  const closeForm = () => {
+    setShowForm(false);
+    setEditKey(null);
+    setForm(emptyForm);
+  };
+  const submitForm = async () => {
+    const repo = form.repo.trim();
     if (!repo) return;
-    setAddAppError("");
+    const csv = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
+    const body = {
+      repo,
+      patterns: csv(form.patterns),
+      types: csv(form.types),
+      protected: form.protected,
+      dead: form.dead,
+      reason: form.reason.trim(),
+    };
+    setFormError("");
     try {
-      await addApp(token, {
-        repo,
-        patterns: newApp.patterns.split(",").map((s) => s.trim()).filter(Boolean),
-        protected: newApp.protected,
-      });
-      setShowAddApp(false);
-      setNewApp({ repo: "", patterns: "", protected: false });
+      await (editKey ? updateApp(token, body) : addApp(token, body));
+      closeForm();
+      // Rules changed, so inferred classifications must recompute server-side.
       await refresh();
     } catch (e) {
-      setAddAppError(String(e instanceof Error ? e.message : e));
+      setFormError(String(e instanceof Error ? e.message : e));
     }
   };
+
+  // Shared add/edit form body — rendered at the top for a new app, inline under an
+  // app's group header when editing its rules. Plain JSX (not a component) so inputs
+  // keep focus across re-renders.
+  const field =
+    "rounded-md border border-neutral-700 bg-neutral-900/60 px-3 py-1.5 text-sm text-neutral-200 outline-none placeholder:text-neutral-600 focus:border-neutral-500";
+  const appForm = (
+    <div className="flex flex-wrap items-end gap-3">
+      <label className="flex flex-col gap-1 text-xs text-neutral-500">
+        app name
+        <input
+          autoFocus={editKey === null}
+          disabled={editKey !== null}
+          value={form.repo}
+          onChange={(e) => setForm({ ...form, repo: e.target.value })}
+          placeholder="my-new-app"
+          className={cn(field, "w-44", editKey !== null && "opacity-60")}
+        />
+      </label>
+      <label className="flex flex-col gap-1 text-xs text-neutral-500">
+        match patterns (comma-separated, case-insensitive substrings)
+        <input
+          autoFocus={editKey !== null}
+          value={form.patterns}
+          onChange={(e) => setForm({ ...form, patterns: e.target.value })}
+          placeholder="my-new-app, mynewappstack"
+          className={cn(field, "w-72")}
+        />
+      </label>
+      <label className="flex flex-col gap-1 text-xs text-neutral-500">
+        claim types (comma-separated, exact)
+        <input
+          value={form.types}
+          onChange={(e) => setForm({ ...form, types: e.target.value })}
+          placeholder="cloudwatch:alarm, sns:topic"
+          className={cn(field, "w-56")}
+        />
+      </label>
+      <label className="flex cursor-pointer select-none items-center gap-2 pb-1.5 text-sm text-neutral-400">
+        <input
+          type="checkbox"
+          checked={form.protected}
+          onChange={(e) => setForm({ ...form, protected: e.target.checked })}
+          className="accent-neutral-300"
+        />
+        protected
+      </label>
+      <label className="flex cursor-pointer select-none items-center gap-2 pb-1.5 text-sm text-neutral-400">
+        <input
+          type="checkbox"
+          checked={form.dead}
+          onChange={(e) => setForm({ ...form, dead: e.target.checked })}
+          className="accent-red-400"
+        />
+        dead
+      </label>
+      {form.dead && (
+        <label className="flex flex-col gap-1 text-xs text-neutral-500">
+          reason (shown on its orphans)
+          <input
+            value={form.reason}
+            onChange={(e) => setForm({ ...form, reason: e.target.value })}
+            placeholder="decommissioned; safe to delete"
+            className={cn(field, "w-64")}
+          />
+        </label>
+      )}
+      <Button disabled={!form.repo.trim()} onClick={submitForm} className="mb-0.5">
+        {editKey ? "Save" : "Add"}
+      </Button>
+      <button onClick={closeForm} className="pb-1.5 text-sm text-neutral-500 hover:text-neutral-300">
+        Cancel
+      </button>
+      {formError && <span className="pb-1.5 text-sm text-red-400">{formError}</span>}
+    </div>
+  );
 
   return (
     <div className="space-y-4">
@@ -254,7 +364,7 @@ export default function Inventory() {
           {allOpen ? "Collapse all" : "Expand all"}
         </button>
         <button
-          onClick={() => setShowAddApp((v) => !v)}
+          onClick={openAdd}
           className="rounded-md border border-neutral-800 px-3 py-1.5 text-sm text-neutral-400 hover:text-neutral-200"
         >
           + Add app
@@ -262,41 +372,8 @@ export default function Inventory() {
         {refreshing && <span className="text-xs text-neutral-500">updating…</span>}
       </div>
 
-      {showAddApp && (
-        <div className="flex flex-wrap items-end gap-3 rounded-lg border border-neutral-800 bg-neutral-900/40 px-4 py-3">
-          <label className="flex flex-col gap-1 text-xs text-neutral-500">
-            app name
-            <input
-              autoFocus
-              value={newApp.repo}
-              onChange={(e) => setNewApp({ ...newApp, repo: e.target.value })}
-              placeholder="my-new-app"
-              className="w-48 rounded-md border border-neutral-700 bg-neutral-900/60 px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-neutral-500"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-neutral-500">
-            match patterns (optional, comma-separated)
-            <input
-              value={newApp.patterns}
-              onChange={(e) => setNewApp({ ...newApp, patterns: e.target.value })}
-              placeholder="my-new-app, mynewapp"
-              className="w-64 rounded-md border border-neutral-700 bg-neutral-900/60 px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-neutral-500"
-            />
-          </label>
-          <label className="flex cursor-pointer select-none items-center gap-2 pb-1.5 text-sm text-neutral-400">
-            <input
-              type="checkbox"
-              checked={newApp.protected}
-              onChange={(e) => setNewApp({ ...newApp, protected: e.target.checked })}
-              className="accent-neutral-300"
-            />
-            protected
-          </label>
-          <Button disabled={!newApp.repo.trim()} onClick={submitAddApp} className="mb-0.5">
-            Add
-          </Button>
-          {addAppError && <span className="pb-1.5 text-sm text-red-400">{addAppError}</span>}
-        </div>
+      {showForm && editKey === null && (
+        <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 px-4 py-3">{appForm}</div>
       )}
 
       {actionError && (
@@ -371,24 +448,38 @@ export default function Inventory() {
           const allSel = items.every((r) => selected.has(r.arn));
           return (
             <div key={key} className="overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900/30">
-              <button
-                onClick={() => toggle(key)}
-                className="flex w-full items-center gap-2 px-4 py-2.5 text-left hover:bg-neutral-900/50"
-              >
-                <ChevronRight
-                  className={cn("h-4 w-4 shrink-0 text-neutral-500 transition-transform", isOpen && "rotate-90")}
-                />
-                <span className={cn("font-medium", TONE[cat] ?? "text-neutral-200")}>{key}</span>
-                <span className="text-sm tabular-nums text-neutral-500">×{items.length}</span>
+              <div className="flex w-full items-center gap-2 px-4 py-2.5 hover:bg-neutral-900/50">
+                <button
+                  onClick={() => toggle(key)}
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                >
+                  <ChevronRight
+                    className={cn("h-4 w-4 shrink-0 text-neutral-500 transition-transform", isOpen && "rotate-90")}
+                  />
+                  <span className={cn("font-medium", TONE[cat] ?? "text-neutral-200")}>{key}</span>
+                  <span className="text-sm tabular-nums text-neutral-500">×{items.length}</span>
+                </button>
+                {inv.appMeta?.[key] && (
+                  <button
+                    onClick={() => openEdit(key)}
+                    className="shrink-0 text-neutral-600 hover:text-neutral-200"
+                    title="edit this app's match rules"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                )}
                 {inv.byAppCost?.[key] != null && (
                   <span
-                    className="ml-auto text-sm tabular-nums text-neutral-400"
+                    className="shrink-0 text-sm tabular-nums text-neutral-400"
                     title="current-month spend attributed via the CloudFormation stack-name tag"
                   >
                     {usd(inv.byAppCost[key])}/mo
                   </span>
                 )}
-              </button>
+              </div>
+              {showForm && editKey === key && (
+                <div className="border-t border-neutral-800/60 bg-neutral-900/40 px-4 py-3">{appForm}</div>
+              )}
               {isOpen && (
                 <div className="overflow-x-auto border-t border-neutral-800/60">
                   <table className="w-full table-fixed text-sm">
@@ -396,8 +487,8 @@ export default function Inventory() {
                       <col style={{ width: "2.5rem" }} />
                       <col style={{ width: "40%" }} />
                       <col style={{ width: "14%" }} />
-                      <col style={{ width: "34%" }} />
-                      <col style={{ width: "2.75rem" }} />
+                      <col style={{ width: "28%" }} />
+                      <col style={{ width: "6.5rem" }} />
                     </colgroup>
                     <thead>
                       <tr className="border-b border-neutral-800/60 text-left text-[11px] uppercase tracking-wide text-neutral-600">
@@ -413,7 +504,12 @@ export default function Inventory() {
                         <th className="px-2 py-1.5 font-medium">name</th>
                         <th className="px-2 py-1.5 font-medium">region</th>
                         <th className="px-2 py-1.5 font-medium">type</th>
-                        <th className="px-2 py-1.5"></th>
+                        <th
+                          className="px-3 py-1.5 text-right font-medium"
+                          title="estimated monthly run rate — the last ~2 weeks of resource-level Cost Explorer data, scaled to 30 days"
+                        >
+                          est $/mo
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -437,7 +533,20 @@ export default function Inventory() {
                               />
                             </td>
                             <td className="truncate px-2 py-1.5 text-neutral-300" title={r.arn}>
-                              {r.name}
+                              {url ? (
+                                <a
+                                  href={url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="hover:text-white hover:underline"
+                                  title="open in AWS console"
+                                >
+                                  {r.name}
+                                  <ExternalLink className="mb-0.5 ml-1 inline h-3 w-3 text-neutral-600" />
+                                </a>
+                              ) : (
+                                r.name
+                              )}
                               {r.override && (
                                 <span className="ml-1.5 text-[10px] uppercase tracking-wide text-sky-400" title="manually classified">
                                   override
@@ -458,18 +567,8 @@ export default function Inventory() {
                             <td className="truncate px-2 py-1.5 text-neutral-500" title={r.reason}>
                               {r.type}
                             </td>
-                            <td className="px-2 py-1.5 text-right">
-                              {url && (
-                                <a
-                                  href={url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-neutral-600 hover:text-neutral-200"
-                                  title="open in AWS console"
-                                >
-                                  <ExternalLink className="inline h-3.5 w-3.5" />
-                                </a>
-                              )}
+                            <td className="px-3 py-1.5 text-right tabular-nums text-neutral-400">
+                              {r.cost != null && (r.cost > 0 && r.cost < 0.005 ? "<$0.01" : usd(r.cost))}
                             </td>
                           </tr>
                         );
