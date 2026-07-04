@@ -119,6 +119,10 @@ async fn scan_region(
             let tags = tags_of(r);
             let stack = tags.get("aws:cloudformation:stack-name").map(String::as_str);
             let c = classify(&name, &rtype, &service, stack, registry);
+            // Resource Explorer's index freshness, surfaced as a "last seen" column.
+            let last_reported = r
+                .last_reported_at()
+                .and_then(|t| t.fmt(aws_smithy_types::date_time::Format::DateTime).ok());
             out.push(json!({
                 "arn": arn,
                 "type": rtype,
@@ -131,6 +135,8 @@ async fn scan_region(
                 "reason": c.reason,
                 "account": account_id,
                 "accountName": account_name,
+                "stack": stack,
+                "lastReported": last_reported,
             }));
         }
 
