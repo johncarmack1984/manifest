@@ -4,5 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  server: { port: 5173 },
+  // Uncommon pinned port; strict so a taken port fails loudly instead of
+  // silently shifting.
+  server: { port: 47303, strictPort: true },
 });
