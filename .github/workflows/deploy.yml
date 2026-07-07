@@ -23,6 +23,7 @@ on:
 permissions:
   id-token: write # mint the OIDC token assumed by AWS
   contents: read
+  deployments: write # record the deployment against the commit
 
 # Never run two deploys at once; let an in-flight cdk deploy finish.
 concurrency:
@@ -74,3 +75,32 @@ jobs:
         run: cd web && pnpm build
       - name: Deploy
         run: cd infra && pnpm exec cdk deploy --all --require-approval never
+
+      - name: Health check
+        run: |
+          set -euo pipefail
+          # The SPA shell answers unauthenticated; a few retries separate "the
+          # deploy broke the app" from CloudFront settling.
+          for i in 1 2 3 4 5; do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 15 "https://${MANIFEST_DOMAIN_NAME}/") \
+              && [ "$code" = "200" ] && { echo "healthy: ${MANIFEST_DOMAIN_NAME} -> $code"; exit 0; }
+            echo "attempt $i: ${MANIFEST_DOMAIN_NAME} -> ${code:-error}; retrying"
+            sleep 10
+          done
+          echo "::error::health check failed for https://${MANIFEST_DOMAIN_NAME}/"
+          exit 1
+
+      - name: Record the deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dep_id=$(gh api "repos/$GITHUB_REPOSITORY/deployments" --input - <<JSON | jq -r '.id'
+          {"ref":"$GITHUB_SHA","environment":"production","auto_merge":false,"required_contexts":[],"description":"cdk deploy: manifest"}
+          JSON
+          )
+          gh api "repos/$GITHUB_REPOSITORY/deployments/$dep_id/statuses" \
+            -f state=success \
+            -f log_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f environment_url="https://${MANIFEST_DOMAIN_NAME}/" >/dev/null
+          echo "recorded deployment $dep_id (environment production)"
