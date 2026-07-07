@@ -34,6 +34,7 @@ jobs:
     # Only when the deploy role is configured (skipped, not failed, otherwise).
     if: ${{ vars.AWS_DEPLOY_ROLE_ARN != '' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       MANIFEST_DOMAIN_NAME: ${{ vars.MANIFEST_DOMAIN_NAME }}
       MANIFEST_HOSTED_ZONE_ID: ${{ vars.MANIFEST_HOSTED_ZONE_ID }}
@@ -45,22 +46,23 @@ jobs:
       MANIFEST_CREATE_AGGREGATOR: ${{ vars.MANIFEST_CREATE_AGGREGATOR }}
       MANIFEST_MEMBER_ROLE: ${{ vars.MANIFEST_MEMBER_ROLE }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Configure AWS credentials (GitHub OIDC)
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
         with:
           targets: aarch64-unknown-linux-gnu
-      - uses: mlugg/setup-zig@v2 # zig is cargo-lambda's cross-compiler
-      - run: pip3 install cargo-lambda
+      # zig is cargo-lambda's cross-compiler
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      - run: pip3 install cargo-lambda==1.9.1
 
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 'lts/*'
           cache: pnpm
