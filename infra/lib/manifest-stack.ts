@@ -8,6 +8,8 @@ import {
   aws_cloudfront_origins as origins,
   aws_cognito as cognito,
   aws_dynamodb as dynamodb,
+  aws_events as events,
+  aws_events_targets as eventsTargets,
   aws_iam as iam,
   aws_lambda as lambda,
   aws_logs as logs,
@@ -16,6 +18,8 @@ import {
   aws_route53_targets as targets,
   aws_s3 as s3,
   aws_s3_deployment as s3deploy,
+  aws_sns as sns,
+  aws_sns_subscriptions as snsSubscriptions,
 } from 'aws-cdk-lib';
 import { ManifestConfig, PRIMARY_REGION } from './config';
 
@@ -26,6 +30,7 @@ export interface ManifestStackProps extends cdk.StackProps {
 // Build outputs (produced by `just api` / `just web`) with placeholders so that
 // `cdk synth` works in CI without first building Rust + the SPA.
 const API_BUILD = path.join(__dirname, '..', '..', 'api', 'target', 'lambda', 'manifest-api');
+const ANOMALY_BUILD = path.join(__dirname, '..', '..', 'api', 'target', 'lambda', 'anomaly');
 const WEB_BUILD = path.join(__dirname, '..', '..', 'web', 'dist');
 const API_PLACEHOLDER = path.join(__dirname, '..', 'assets', 'lambda-placeholder');
 const WEB_PLACEHOLDER = path.join(__dirname, '..', 'assets', 'web-placeholder');
@@ -303,6 +308,82 @@ export class ManifestStack extends cdk.Stack {
     const fnUrl = fn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.AWS_IAM });
 
     // ---------------------------------------------------------------------
+    // Spend-anomaly alerting. A daily EventBridge rule invokes a second, plain
+    // (non-HTTP) Lambda that pulls trailing daily cost-per-service/-account from
+    // Cost Explorer, runs manifest's own detector, and emails a digest via SNS —
+    // deliberately independent of AWS Cost Anomaly Detection (a watchdog that
+    // doesn't lean on the same console it backstops). It never emails on a quiet
+    // day and de-dupes per evaluated date via the cache table.
+    // ---------------------------------------------------------------------
+    const alertTopic = new sns.Topic(this, 'Alerts', {
+      topicName: `${cfg.name}-alerts`,
+      displayName: 'manifest spend alerts',
+    });
+    // One email subscription (confirm it via the link AWS sends on first deploy).
+    // Empty MANIFEST_ALERT_EMAIL stands up the topic with no subscription.
+    if (cfg.alertEmail) {
+      alertTopic.addSubscription(new snsSubscriptions.EmailSubscription(cfg.alertEmail));
+    }
+
+    const anomalyLogs = new logs.LogGroup(this, 'AnomalyLogs', {
+      logGroupName: `/aws/lambda/${cfg.name}-anomaly`,
+      retention: logs.RetentionDays.TWO_WEEKS,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const anomalyFn = new lambda.Function(this, 'Anomaly', {
+      functionName: `${cfg.name}-anomaly`,
+      runtime: lambda.Runtime.PROVIDED_AL2023,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'bootstrap',
+      code: lambda.Code.fromAsset(asset(ANOMALY_BUILD, API_PLACEHOLDER, this, 'anomaly')),
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(60),
+      logGroup: anomalyLogs,
+      environment: {
+        CACHE_TABLE: cache.tableName,
+        ALERT_TOPIC_ARN: alertTopic.topicArn,
+        APP_URL: `https://${cfg.domainName}`,
+        ANOMALY_MIN_DOLLARS: String(cfg.anomalyMinDollars),
+        ANOMALY_PCT: String(cfg.anomalyPct),
+        ANOMALY_BASELINE_DAYS: String(cfg.anomalyBaselineDays),
+      },
+    });
+
+    // Least privilege: read cost, read org account names (for readable per-account
+    // alerts), publish to the topic, and read/write only the cache table (de-dupe).
+    anomalyFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'CostExplorerRead',
+        actions: ['ce:GetCostAndUsage'],
+        resources: ['*'],
+      }),
+    );
+    anomalyFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'OrgAccounts',
+        actions: ['organizations:ListAccounts'],
+        resources: ['*'],
+      }),
+    );
+    anomalyFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'DedupeCache',
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [cache.tableArn],
+      }),
+    );
+    alertTopic.grantPublish(anomalyFn);
+
+    // Fire once a day (UTC). The detector evaluates the last *complete* day, so the
+    // hour only affects how soon after midnight UTC you hear about a jump.
+    new events.Rule(this, 'AnomalySchedule', {
+      ruleName: `${cfg.name}-anomaly-daily`,
+      schedule: events.Schedule.expression(cfg.anomalyScheduleCron),
+      targets: [new eventsTargets.LambdaFunction(anomalyFn)],
+    });
+
+    // ---------------------------------------------------------------------
     // TLS cert + DNS (zone supplied by id/name so synth needs no AWS lookup).
     // ---------------------------------------------------------------------
     const zone = route53.HostedZone.fromHostedZoneAttributes(this, 'Zone', {
@@ -386,6 +467,7 @@ export class ManifestStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'CognitoUserPoolId', { value: pool.userPoolId });
     new cdk.CfnOutput(this, 'CognitoClientId', { value: client.userPoolClientId });
     new cdk.CfnOutput(this, 'ResourceExplorerViewArn', { value: viewArn });
+    new cdk.CfnOutput(this, 'AlertTopicArn', { value: alertTopic.topicArn });
 
     // For configuring the Identity Center SAML app (see README → Authentication).
     new cdk.CfnOutput(this, 'SamlAcsUrl', {

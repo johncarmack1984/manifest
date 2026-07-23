@@ -9,6 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 lambda_http = "0.13"
+# The scheduled anomaly-alerting Lambda is a plain (non-HTTP) runtime handler.
+lambda_runtime = "0.13"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
@@ -18,6 +20,7 @@ aws-sdk-costexplorer = "1"
 aws-sdk-resourceexplorer2 = "1"
 aws-sdk-dynamodb = "1"
 aws-sdk-organizations = "1"
+aws-sdk-sns = "1"
 aws-sdk-acm = "1"
 aws-sdk-resourcegroupstagging = "1"
 # Global display names (distribution aliases, hosted-zone domains).
