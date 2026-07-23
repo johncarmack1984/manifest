@@ -1,13 +1,13 @@
 # manifest
 
-A self-hosted AWS cost + inventory dashboard. Cost Explorer shows *spend by
-service* but never *which resource is the spend* or *what's just sitting there
-idle*; manifest does, turning a two-day cleanup into a twenty-minute one.
+A self-hosted AWS **spend watchdog** and cost + inventory dashboard that runs entirely in **your own account**. It watches your daily spend and **emails you when a service or account jumps** — its own anomaly detector, independent of the AWS console — and shows *which resource* the spend actually is and *what's just sitting there idle*, turning a two-day cleanup into a twenty-minute one.
 
-Deploy it into any AWS account with `just deploy`. Effectively free to run (see
-[Cost](#cost)).
+It's free and open-source and self-hosted: no third party ever sees your billing data, and there are no per-seat or percent-of-spend fees — you pay AWS a few cents a month (see [Cost](#cost)), nobody else.
+
+Deploy it into any AWS account with `just deploy` — or, with no local toolchain at all, via the [packaged deploy path](deploy/README.md) (Docker, or a browser).
 
 ## What it shows
+- **Spend alerts**: a daily anomaly scan emails you when any service's or account's daily cost jumps past a configurable threshold versus a trailing baseline — manifest's own detector, not a read of AWS Cost Anomaly Detection. See [Spend alerts](#spend-alerts).
 - **Cost**: spend by account/app (org-wide via consolidated billing), service,
   region, and day; month-over-month plus a forecast (Cost Explorer, cached in
   DynamoDB ~1h since CE charges $0.01/call).
@@ -22,10 +22,14 @@ Deploy it into any AWS account with `just deploy`. Effectively free to run (see
                        └ /api/*  → Lambda Function URL (Axum, arm64)
 Cognito Hosted UI → JWT → Axum validates each request
 Axum → Cost Explorer + Resource Explorer + DynamoDB cache
+
+EventBridge (daily) → anomaly Lambda (arm64) → Cost Explorer → SNS → your inbox
 ```
 Infra is AWS CDK (TypeScript); the API is Rust / Axum on Lambda; the UI
 is Vite + React + TypeScript. The SPA fetches all its config from
 `/api/config` at runtime, so nothing account-specific is baked into the build.
+A second, plain Lambda runs the daily spend-anomaly scan and emails a digest via
+SNS — see [Spend alerts](#spend-alerts).
 
 ## Layout
 | Dir | What |
@@ -35,6 +39,7 @@ is Vite + React + TypeScript. The SPA fetches all its config from
 | `web/`   | Vite + React + TypeScript SPA |
 
 ## Prerequisites
+Prefer not to install any of this? The [packaged deploy path](deploy/README.md) needs only Docker + AWS credentials (or just a browser, via GitHub Codespaces) — it carries the whole toolchain below. Otherwise, for a local build:
 - An AWS account + credentials (`aws sso login` / `AWS_PROFILE=…`), admin-ish for the first deploy.
 - To see org-wide per-account spend, deploy into your organization's management (payer) account, or a delegated Cost Explorer admin account; from a standalone account it shows only that account.
 - A Route53 hosted zone you control (for the dashboard's domain + TLS cert).
@@ -57,6 +62,21 @@ First login: the Cognito user (`MANIFEST_OWNER_EMAIL`) is created with a
 temporary password emailed by Cognito; set a real one on first sign-in.
 
 Individual steps: `just api`, `just web`, `just up`, `just synth`, `just destroy`.
+
+No local toolchain? `deploy/bootstrap.sh` does the whole build + deploy inside a pinned Docker image — only Docker + AWS credentials required. See [deploy/](deploy/README.md).
+
+## Spend alerts
+manifest watches your spend and emails you when it moves — its own detector, deliberately independent of AWS Cost Anomaly Detection (a watchdog shouldn't lean on the same console it's meant to backstop).
+
+A daily EventBridge rule invokes a second Lambda that pulls the trailing daily cost per **service** and per **account** from Cost Explorer, compares the most recent complete day against a spike-robust trailing baseline, and emails a single digest of anything that jumped — via an SNS topic. It stays quiet on a normal day, and de-dupes per day so a retry or manual re-run won't double-send.
+
+A day fires only when it clears **both** gates, which is what keeps the signal low-noise:
+- an **absolute** floor — the daily increase is at least `MANIFEST_ANOMALY_MIN_DOLLARS` (default `$5`), so a big percentage on a trivial line stays quiet; and
+- a **relative** jump — at least `MANIFEST_ANOMALY_PCT` (default `50`) percent above baseline, so steady growth on a large line stays quiet.
+
+A service or account with no recent baseline that starts spending materially is reported as *new spend*. The baseline is the trailing `MANIFEST_ANOMALY_BASELINE_DAYS` (default `14`) days; the scan runs on `MANIFEST_ANOMALY_SCHEDULE` (default `cron(0 13 * * ? *)`, i.e. 13:00 UTC daily).
+
+Setup is one field: alerts go to `MANIFEST_ALERT_EMAIL` (defaults to `MANIFEST_OWNER_EMAIL`). AWS emails a subscription-confirmation link on first deploy — click it once. To preview without waiting for the schedule, run `just alert-test`: it invokes the deployed function in dry-run mode and logs the digest it *would* send (nothing is emailed). All thresholds above are optional `infra/.env` (or repo Variable) overrides.
 
 ## Continuous deployment
 Once set up, every push to `main` (a merged PR) deploys itself via GitHub Actions
@@ -151,8 +171,10 @@ set `MANIFEST_RESOURCE_EXPLORER_VIEW_ARN` (the `ResourceExplorerViewArn` stack o
 
 ## Cost
 Effectively free: Lambda + DynamoDB on-demand + Resource Explorer (free) +
-CloudFront/S3 pennies. The only metered call is Cost Explorer ($0.01/request),
-capped by the DynamoDB cache.
+CloudFront/S3 pennies + SNS (per-email, negligible). The only metered call is
+Cost Explorer ($0.01/request), capped by the DynamoDB cache. The daily anomaly
+scan adds two Cost Explorer calls a day (per-service and per-account), about
+$0.60/month.
 
 ## Teardown
 ```sh

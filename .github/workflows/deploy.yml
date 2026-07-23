@@ -46,6 +46,12 @@ jobs:
       MANIFEST_SAML_METADATA_URL: ${{ vars.MANIFEST_SAML_METADATA_URL }}
       MANIFEST_CREATE_AGGREGATOR: ${{ vars.MANIFEST_CREATE_AGGREGATOR }}
       MANIFEST_MEMBER_ROLE: ${{ vars.MANIFEST_MEMBER_ROLE }}
+      # Spend-anomaly alerts (all optional; defaults in infra/lib/config.ts).
+      MANIFEST_ALERT_EMAIL: ${{ vars.MANIFEST_ALERT_EMAIL }}
+      MANIFEST_ANOMALY_MIN_DOLLARS: ${{ vars.MANIFEST_ANOMALY_MIN_DOLLARS }}
+      MANIFEST_ANOMALY_PCT: ${{ vars.MANIFEST_ANOMALY_PCT }}
+      MANIFEST_ANOMALY_BASELINE_DAYS: ${{ vars.MANIFEST_ANOMALY_BASELINE_DAYS }}
+      MANIFEST_ANOMALY_SCHEDULE: ${{ vars.MANIFEST_ANOMALY_SCHEDULE }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -69,8 +75,8 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - name: Build Lambda (arm64)
-        run: cd api && cargo lambda build --release --arm64 --bin manifest-api
+      - name: Build Lambdas (arm64)
+        run: cd api && cargo lambda build --release --arm64 --bin manifest-api --bin anomaly
       - name: Build SPA
         run: cd web && pnpm build
       - name: Deploy

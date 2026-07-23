@@ -5,9 +5,10 @@ set shell := ["bash", "-uc"]
 install:
     pnpm install
 
-# Build the Rust Lambda (arm64) that CDK packages.
+# Build the Rust Lambdas (arm64) that CDK packages: the Axum API and the daily
+# spend-anomaly alerter.
 api:
-    cd api && cargo lambda build --release --arm64 --bin manifest-api
+    cd api && cargo lambda build --release --arm64 --bin manifest-api --bin anomaly
 
 # Classify + tag the account inventory (dry-run by default; pass --apply to write).
 tag *args:
@@ -35,6 +36,15 @@ registry-pull:
     cd api && aws dynamodb get-item --region us-east-1 --table-name manifest-cache \
       --key '{"cache_key":{"S":"registry:projects.toml"}}' --query 'Item.body.S' --output text > projects.toml \
       && echo "✓ pulled live registry → api/projects.toml"
+
+# Run the deployed anomaly alerter now (force + dry-run): computes today's digest
+# and logs what it WOULD email, without sending or de-duping. Watch the result in
+# the function's CloudWatch logs. Drop --payload's flags to actually send.
+alert-test:
+    aws lambda invoke --region us-east-1 \
+      --function-name "${MANIFEST_NAME:-manifest}-anomaly" \
+      --cli-binary-format raw-in-base64-out \
+      --payload '{"force":true,"dry_run":true}' /dev/stdout | cat
 
 # Build the React SPA.
 web:

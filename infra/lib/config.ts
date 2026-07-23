@@ -26,6 +26,18 @@ export interface ManifestConfig {
   /** Email of the single dashboard user (admin-created in the pool). Ignored
    *  when samlMetadataUrl is set (users then come from Identity Center). */
   ownerEmail: string;
+  /** Where spend-anomaly alerts are emailed. Defaults to ownerEmail. Only empty
+   *  when neither it nor ownerEmail is set (e.g. Identity Center federation with
+   *  no MANIFEST_ALERT_EMAIL) — the topic is then created with no subscription. */
+  alertEmail: string;
+  /** Anomaly alerting: a service/account day fires only when it clears BOTH an
+   *  absolute daily-increase floor (dollars) and a relative jump (percent), vs a
+   *  spike-robust trailing baseline of this many days. */
+  anomalyMinDollars: number;
+  anomalyPct: number;
+  anomalyBaselineDays: number;
+  /** When the daily anomaly scan runs (an EventBridge cron expression, UTC). */
+  anomalyScheduleCron: string;
   /** Optional: IAM Identity Center SAML app metadata URL. When set, sign-in
    *  federates to Identity Center (AWS SSO) and no Cognito-local user is made. */
   samlMetadataUrl: string;
@@ -64,6 +76,13 @@ export function loadConfig(): ManifestConfig {
     hostedZoneName: e.MANIFEST_HOSTED_ZONE_NAME || '',
     cognitoDomainPrefix: e.MANIFEST_COGNITO_DOMAIN_PREFIX || '',
     ownerEmail: e.MANIFEST_OWNER_EMAIL || '',
+    // Alerts default to the dashboard owner; MANIFEST_ALERT_EMAIL overrides. Unset
+    // (or empty — an unset CD repo variable arrives as "") falls back to the owner.
+    alertEmail: e.MANIFEST_ALERT_EMAIL || e.MANIFEST_OWNER_EMAIL || '',
+    anomalyMinDollars: Number(e.MANIFEST_ANOMALY_MIN_DOLLARS || 5),
+    anomalyPct: Number(e.MANIFEST_ANOMALY_PCT || 50),
+    anomalyBaselineDays: Number(e.MANIFEST_ANOMALY_BASELINE_DAYS || 14),
+    anomalyScheduleCron: e.MANIFEST_ANOMALY_SCHEDULE || 'cron(0 13 * * ? *)',
     samlMetadataUrl: e.MANIFEST_SAML_METADATA_URL || '',
     createAggregator: e.MANIFEST_CREATE_AGGREGATOR !== 'false',
     memberInventoryRole:
