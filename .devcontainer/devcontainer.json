@@ -1,0 +1,14 @@
+{
+  "name": "manifest deploy toolchain",
+  "//": "Open this repo in GitHub Codespaces (or VS Code Dev Containers) to get the full build+deploy toolchain — Rust, cargo-lambda, Zig, Node, pnpm, just, CDK, AWS CLI — with zero local install. Then: cp infra/.env.example infra/.env (edit it), and run `just deploy`. See deploy/README.md.",
+  "build": {
+    "dockerfile": "../deploy/Dockerfile",
+    "context": "../deploy"
+  },
+  "postCreateCommand": "just install",
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "esbenp.prettier-vscode"]
+    }
+  }
+}
