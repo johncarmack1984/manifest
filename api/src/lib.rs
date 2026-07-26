@@ -4,3 +4,4 @@
 pub mod anomaly;
 pub mod classify;
 pub mod registry;
+pub mod tombstone;

@@ -191,7 +191,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match delete_resource(&r.rtype, &r.arn, &r.region, &r.name) {
             Ok(()) => {
                 println!("  ✓ deleted {}", r.name);
-                let _ = clear_mark(&ddb, &state_table, &r.arn).await;
+                let _ = manifest_api::tombstone::record(
+                    &ddb,
+                    &state_table,
+                    &r.arn,
+                    chrono::Utc::now().timestamp(),
+                )
+                .await;
                 deleted += 1;
             }
             Err(e) => {
@@ -410,17 +416,6 @@ async fn load_marked(
         }
     }
     Ok(out)
-}
-
-async fn clear_mark(ddb: &aws_sdk_dynamodb::Client, table: &str, arn: &str) -> Result<(), Box<dyn std::error::Error>> {
-    ddb.update_item()
-        .table_name(table)
-        .key("arn", AttributeValue::S(arn.to_string()))
-        .update_expression("REMOVE #m")
-        .expression_attribute_names("#m", "mark")
-        .send()
-        .await?;
-    Ok(())
 }
 
 fn row_from(r: &Resource, reg: &Registry) -> Row {

@@ -37,6 +37,33 @@ pub async fn handler(
     }
 }
 
+/// Drop resources the reap tool has just deleted, which Resource Explorer's index
+/// still reports for a few minutes. Filtering here (rather than at read time) means
+/// the snapshot that gets cached is already correct — otherwise the refresh an
+/// operator naturally runs right after a reap pins the deleted rows in the cache
+/// for a full TTL, making a successful reap look like it failed.
+///
+/// Once the window lapses the ARN is visible again: if it somehow still exists,
+/// the operator should see it rather than have it hidden forever.
+fn drop_tombstoned(
+    resources: &mut Vec<Value>,
+    state: &std::collections::HashMap<String, crate::state::ResourceState>,
+    now: i64,
+) {
+    if state.is_empty() {
+        return;
+    }
+    resources.retain(|r| {
+        let Some(arn) = r["arn"].as_str() else {
+            return true;
+        };
+        let Some(deleted_at) = state.get(arn).and_then(|st| st.deleted_at) else {
+            return true;
+        };
+        !manifest_api::tombstone::suppressed(deleted_at, now)
+    });
+}
+
 /// Resource Explorer returns tags as the `tags` property (array of {Key, Value}).
 fn tags_of(r: &Resource) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
@@ -555,6 +582,7 @@ async fn compute(s: &AppState) -> Res<Value> {
     // 3. Apply durable operator state: a manual classification override wins over
     //    inference, and a deletion mark is surfaced for the UI / reaper.
     let state = crate::state::load(s).await;
+    drop_tombstoned(&mut resources, &state, chrono::Utc::now().timestamp());
     if !state.is_empty() {
         for r in &mut resources {
             let arn = r["arn"].as_str().unwrap_or_default().to_string();
@@ -1081,4 +1109,57 @@ where
         .buffer_unordered(10)
         .collect()
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::ResourceState;
+    use std::collections::HashMap;
+
+    const NOW: i64 = 1_785_000_000;
+
+    fn rows() -> Vec<Value> {
+        vec![json!({ "arn": "arn:reaped" }), json!({ "arn": "arn:live" })]
+    }
+
+    fn state(deleted_at: Option<i64>) -> HashMap<String, ResourceState> {
+        let mut m = HashMap::new();
+        m.insert(
+            "arn:reaped".to_string(),
+            ResourceState { app: None, mark: None, deleted_at },
+        );
+        m
+    }
+
+    #[test]
+    fn a_just_reaped_resource_is_dropped_before_the_snapshot_is_cached() {
+        let mut r = rows();
+        drop_tombstoned(&mut r, &state(Some(NOW - 50)), NOW);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0]["arn"], "arn:live");
+    }
+
+    #[test]
+    fn a_stale_tombstone_stops_hiding_the_resource() {
+        let mut r = rows();
+        drop_tombstoned(&mut r, &state(Some(NOW - 24 * 3600)), NOW);
+        assert_eq!(r.len(), 2);
+    }
+
+    /// State exists for plenty of resources that were never reaped (classification
+    /// overrides, marks); none of them should be filtered.
+    #[test]
+    fn state_without_a_tombstone_hides_nothing() {
+        let mut r = rows();
+        drop_tombstoned(&mut r, &state(None), NOW);
+        assert_eq!(r.len(), 2);
+    }
+
+    #[test]
+    fn no_state_at_all_hides_nothing() {
+        let mut r = rows();
+        drop_tombstoned(&mut r, &HashMap::new(), NOW);
+        assert_eq!(r.len(), 2);
+    }
 }
