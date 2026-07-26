@@ -91,3 +91,38 @@ impl FromRequestParts<AppState> for AuthUser {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
+    /// jsonwebtoken 10 ships no crypto backend under its default features: unless
+    /// exactly one of `aws_lc_rs` / `rust_crypto` is on, every sign and verify
+    /// panics at runtime while still compiling clean. Exercising a real
+    /// signature here keeps that from reaching a deploy again.
+    #[derive(serde::Serialize)]
+    struct TestClaims {
+        sub: String,
+        token_use: String,
+        exp: usize,
+    }
+
+    #[test]
+    fn crypto_provider_is_wired_up() {
+        let key = EncodingKey::from_secret(b"manifest-test-secret");
+        let claims = TestClaims {
+            sub: "sub".into(),
+            token_use: "id".into(),
+            exp: 4_102_444_800, // 2100-01-01
+        };
+        let token = encode(&Header::new(Algorithm::HS256), &claims, &key)
+            .expect("signing must not panic: no jsonwebtoken crypto provider is installed");
+
+        let mut v = Validation::new(Algorithm::HS256);
+        v.validate_aud = false;
+        let decoded = decode::<Claims>(&token, &DecodingKey::from_secret(b"manifest-test-secret"), &v)
+            .expect("verification must not panic: no jsonwebtoken crypto provider is installed");
+        assert_eq!(decoded.claims.token_use, "id");
+    }
+}
