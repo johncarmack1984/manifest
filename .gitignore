@@ -22,3 +22,7 @@ api/projects.toml
 # misc
 .DS_Store
 *.log
+
+CLAUDE.md
+.claude/**/*
+AGENTS.md
