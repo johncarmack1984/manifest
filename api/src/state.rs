@@ -15,6 +15,9 @@ pub struct ResourceState {
     pub app: Option<String>,
     /// Deletion mark (e.g. "marked") — set in the UI, executed by the reap tool.
     pub mark: Option<String>,
+    /// Unix seconds at which the reap tool deleted this resource, if it did.
+    /// See [`manifest_api::tombstone`].
+    pub deleted_at: Option<i64>,
 }
 
 /// Load every resource's operator state, keyed by ARN. The table holds only the
@@ -43,7 +46,11 @@ pub async fn load(s: &AppState) -> HashMap<String, ResourceState> {
             };
             out.insert(
                 arn.clone(),
-                ResourceState { app: str_attr(item, "app"), mark: str_attr(item, "mark") },
+                ResourceState {
+                    app: str_attr(item, "app"),
+                    mark: str_attr(item, "mark"),
+                    deleted_at: num_attr(item, manifest_api::tombstone::ATTR),
+                },
             );
         }
         match resp.last_evaluated_key() {
@@ -56,6 +63,10 @@ pub async fn load(s: &AppState) -> HashMap<String, ResourceState> {
 
 fn str_attr(item: &HashMap<String, AttributeValue>, key: &str) -> Option<String> {
     item.get(key).and_then(|v| v.as_s().ok()).cloned()
+}
+
+fn num_attr(item: &HashMap<String, AttributeValue>, key: &str) -> Option<i64> {
+    item.get(key).and_then(|v| v.as_n().ok()).and_then(|n| n.parse().ok())
 }
 
 /// Set (`Some`) or clear (`None`) a resource's classification override, preserving
