@@ -37,6 +37,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      CARGO_INCREMENTAL: "0"
       MANIFEST_DOMAIN_NAME: ${{ vars.MANIFEST_DOMAIN_NAME }}
       MANIFEST_HOSTED_ZONE_ID: ${{ vars.MANIFEST_HOSTED_ZONE_ID }}
       MANIFEST_HOSTED_ZONE_NAME: ${{ vars.MANIFEST_HOSTED_ZONE_NAME }}
@@ -64,6 +67,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch
         with:
           targets: aarch64-unknown-linux-gnu
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: api
+          cache-targets: "false"
       # zig is cargo-lambda's cross-compiler
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
       - run: pip3 install cargo-lambda==1.9.1
@@ -82,6 +90,9 @@ jobs:
       - name: Deploy
         run: cd infra && pnpm exec cdk deploy --all --require-approval never
 
+      - name: sccache stats
+        if: ${{ always() }}
+        run: sccache --show-stats
       - name: Health check
         run: |
           set -euo pipefail
