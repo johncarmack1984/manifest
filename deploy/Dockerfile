@@ -29,7 +29,7 @@ RUN set -eux; \
     \
     # cargo-lambda + Zig (as a pip package, shimmed onto PATH) for the arm64
     # Lambda cross-compile — same versions the CI deploy uses.
-    pip3 install --break-system-packages --no-cache-dir cargo-lambda==1.9.1 ziglang==0.16.0; \
+    pip3 install --break-system-packages --no-cache-dir cargo-lambda==1.9.2 ziglang==0.16.0; \
     printf '#!/bin/sh\nexec python3 -m ziglang "$@"\n' > /usr/local/bin/zig; \
     chmod +x /usr/local/bin/zig; \
     rustup target add aarch64-unknown-linux-gnu; \
