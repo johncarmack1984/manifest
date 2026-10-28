@@ -16,24 +16,31 @@ axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
 
 aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-costexplorer = "1"
-aws-sdk-resourceexplorer2 = "1"
-aws-sdk-dynamodb = "1"
-aws-sdk-organizations = "1"
-aws-sdk-sns = "1"
-aws-sdk-acm = "1"
-aws-sdk-resourcegroupstagging = "1"
+# The SDK crates' defaults minus `rustls`, which only compiles in the legacy
+# hyper 0.14 / rustls 0.21 client (rustls-webpki 0.101, h2 0.3: EOL, with open
+# advisories). With BehaviorVersion::latest() every client already picks the
+# hyper 1 `default-https-client`, so the legacy one was compiled in but unused.
+# S3 also drops `sigv4a`: only Multi-Region Access Points sign with it (we only
+# call ListBuckets), and its crypto-bigint 0.5 has no fix for RUSTSEC-2026-0387.
+# Collapse back to plain defaults once the SDK drops both from them.
+aws-sdk-costexplorer = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-resourceexplorer2 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-dynamodb = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-organizations = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sns = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-acm = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-resourcegroupstagging = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 # Global display names (distribution aliases, hosted-zone domains).
-aws-sdk-cloudfront = "1"
-aws-sdk-route53 = "1"
+aws-sdk-cloudfront = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-route53 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 # "created on" lookups (types that expose a creation time).
-aws-sdk-ec2 = "1"
-aws-sdk-s3 = "1"
-aws-sdk-iam = "1"
-aws-sdk-cloudwatchlogs = "1"
-aws-sdk-secretsmanager = "1"
-aws-sdk-ecr = "1"
-aws-sdk-cognitoidentityprovider = "1"
+aws-sdk-ec2 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["http-1x", "default-https-client", "rt-tokio"] }
+aws-sdk-iam = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-cloudwatchlogs = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-secretsmanager = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-ecr = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-cognitoidentityprovider = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-smithy-types = "1"
 
 serde = { version = "1", features = ["derive"] }
