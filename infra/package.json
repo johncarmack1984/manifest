@@ -9,7 +9,7 @@
     "destroy": "cdk destroy --all"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^26",
     "aws-cdk": "^2.170.0",
     "ts-node": "^10.9.2",
     "typescript": "~5.7.2"
